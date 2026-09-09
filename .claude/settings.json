@@ -7,13 +7,13 @@
           {
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/protect-bash.sh\"",
-            "timeout": 5,
+            "timeout": 30,
             "statusMessage": "Checking command safety..."
           },
           {
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/snapshot-before-tool.sh\"",
-            "timeout": 15,
+            "timeout": 30,
             "statusMessage": "Snapshotting scripts..."
           }
         ]
@@ -24,13 +24,13 @@
           {
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/protect-files.sh\"",
-            "timeout": 5,
+            "timeout": 30,
             "statusMessage": "Checking file protection..."
           },
           {
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/backup-before-edit.sh\"",
-            "timeout": 5,
+            "timeout": 30,
             "statusMessage": "Backing up file..."
           }
         ]
