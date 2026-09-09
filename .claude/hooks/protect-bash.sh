@@ -139,7 +139,11 @@ path_to_ere() {
             # this was a regression introduced by resolving the root, and the replay
             # evidence could not see it: 7,641 historical commands contain no doubled
             # spelling, so "0 new refusals" was silent about an entire class.
-            /)   out="$out[/\\\\]+" ;;
+            # Braced deliberately: `$out[` reads as an array expansion to shellcheck
+            # (SC1087, error severity), and this is the one place a `[` follows a
+            # variable. Latent since the root-resolution rework -- CI had never run on
+            # it, because the commit was never pushed.
+            /)   out="${out}[/\\\\]+" ;;
             '['|']'|'*'|'+'|'?'|'^'|'$'|'('|')'|'{'|'}'|'|'|'.'|'\') out="$out\\$c" ;;
             *)   out="$out$c" ;;
         esac
