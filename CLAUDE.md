@@ -28,8 +28,8 @@ All under `tools/`:
 | **XEditLib.dll** | Programmatic ESP/ESM reading via FFI | Load with koffi in Node.js (see below) |
 | **Spriggit** | ESP ↔ YAML/JSON conversion (.NET) | `spriggit serialize ...` |
 | **AutoMod CLI** | NIF meshes, BSA archives, audio, MCM, ESP one-liners | `bash tools/automod-cli.sh <module> <command> --json` |
-| **PyFFI** | NIF geometry edit — **NiTriShape (LE-format) ONLY** (any modern Python with setuptools) | See PyFFI section below |
-| **PyNifly** | NIF read/write incl. **BSTriShape (SSE)** + **animation/controller authoring** (Python, prebuilt DLL) | See PyNifly section below |
+| **PyFFI** | NIF geometry edit — **NiTriShape (LE-format) ONLY** (any modern Python with setuptools) | See PyFFI / PyNifly below; recipes in the skyrim-nif skill |
+| **PyNifly** | NIF read/write incl. **BSTriShape (SSE)** + **animation/controller authoring** (Python, prebuilt DLL) | See PyFFI / PyNifly below; recipes in the skyrim-nif skill |
 | **ReSaver CLI** | Headless `.ess` save parse / query / cross-reference / clean / changeform-level diagnostics | `bash tools/resaver-cli.sh <op> <save.ess>` — read ops: `info\|dump\|find\|find-refs\|worries\|recon\|changeform\|extradata-scan\|changeform-diff\|freeze-report\|globaldata\|globaldata-diff`; write ops (dry-run unless `--apply`, always a NEW file): `set-global\|set-var\|clean\|reset-havok\|cleanse-formlists\|remove-created`; `verify-roundtrip` self-test. Every `--apply` is verify-gated (re-read==model or delete+fail). Resolve FormID→EditorID via `tools/resaver-resolve-names.js`. Needs JDK 17+ + ReSaver's jar (see install section). |
 | **cosave-info** | READ-ONLY structural survey of an SKSE `.skse` co-save → JSON (which mods stashed co-save data + how much) | `bash tools/cosave-cli.sh <cosave.skse>` (Python 3; the cosave sits next to its `.ess`) |
 | **skyrim-winner** | **"Which plugin actually wins this record?"** Loads the FULL active load order and asks xEdit. No index, no cache -- xEdit is the authority. | `bash tools/skyrim-winner.sh <winner\|chain> <formid> [plugin]` · `... conflicts <plugin>` -- needs **xeditlib**; see below |
@@ -72,7 +72,7 @@ None of the modding tools are bundled — install only the ones you need. Per to
   - Verify with that same interpreter: `python -c "import pyffi; print(pyffi.__version__)"`.
 - **PyNifly** — SSE BSTriShape read/write + animation/controller authoring + the independent parse gate.
   - Acquire: download `io_scene_nifly.zip` from the latest release at https://github.com/BadDogSkyrim/PyNifly/releases and extract it into `tools/pynifly/` so the prebuilt DLL lands at `tools/pynifly/io_scene_nifly/pyn/NiflyDLL.dll`. No build step. (A `git clone` of the repo does NOT contain the compiled DLL — it only ships in the release zip.)
-  - Verify: load the DLL per the PyNifly section below.
+  - Verify: load the DLL per the skyrim-nif skill.
 - **Blender (headless)** — NIF mesh repair + render-to-PNG verification.
   - Acquire: download from blender.org; install the PyNifly Blender addon.
   - Verify: `blender --background --version`.
@@ -119,57 +119,25 @@ bash tools/automod-cli.sh <module> <command> [args] --json
 - **PyFFI / PyNifly**: NIF geometry and animation authoring (see below).
 - **AutoMod `nif` cannot inspect Havok collision (`bhk*`) blocks** — it handles textures/strings/shaders only. Use NifSkope or a purpose-built parser for collision.
 
-## PyFFI (NIF geometry edits — LE-format NiTriShape only)
+## PyFFI / PyNifly (NIF geometry + animation authoring)
 
-**Works on any modern Python (verified through 3.14) as long as `setuptools` is installed alongside it** — see the Installing section above for why. Still needs the `time.clock = time.perf_counter` monkey-patch (a separate, still-open upstream issue, unrelated to the distutils/3.12 one).
+**PyFFI works on any modern Python (verified through 3.14)** as long as `setuptools` is installed
+alongside it — see the Installing section above. It still needs the
+`time.clock = time.perf_counter` monkey-patch (a separate, still-open upstream issue).
 
 > **HARD LIMITS:**
 > 1. PyFFI **cannot read BSTriShape at all** (`Unknown block type 'BSTriShape'`) — i.e. any SSE-format (user_version_2=100) NIF. Use PyNifly.
 > 2. PyFFI can construct controller blocks, but an **authored NiControllerManager/NiControllerSequence CTDs the engine** despite passing PyFFI's own readback — it omits header string-table registrations the engine requires. **Never author animations with PyFFI — use PyNifly.**
 > 3. Building from a fresh `NifFormat.Data()` corrupts the header string table on write. Always **load an existing valid NIF and restructure it** instead.
+> 4. **PyNifly is the validation gate** — cross-read any authored/edited NIF with it before in-game testing, and check the *specific* crashable subsystem (e.g. the controller): a geometry-only read can pass while the animation stack is malformed.
 >
 > PyFFI remains the right tool for LE-format NiTriShape geometry edits (blade split/subdivision, bound spheres, vertex shifts).
 
-```python
-# run with any modern Python that has setuptools installed alongside pyffi
-import time; time.clock = time.perf_counter
-from pyffi.formats.nif import NifFormat
-
-with open('path/to/input.nif', 'rb') as f:
-    data = NifFormat.Data(); data.read(f)
-
-# ... modify blocks ...
-
-with open('path/to/output.nif', 'wb') as f:
-    data.write(f)
-```
-
-### Why PyFFI over binary patching / NifSkope re-saves
-- Preserves exact NIF format (BSStreamVersion, block types, shader flags, texture slots).
-- Handles version differences (83 vs 100) correctly — no format corruption.
-- NifSkope converts NIFs to BSStreamVersion 100 (SSE format) on save, which can strip texture slots and change BSLightingShaderProperty structure → crashes with Community Shaders / TruePBR in VR. Scripted PyFFI edits avoid this.
-
-### Key operations
-- **Collision shape editing**: `block.dimensions.y = new_value` on `bhkBoxShape`
-- **Transform editing**: `block.transform.m_42 = new_value` on `bhkConvexTransformShape`
-- **Block iteration**: `for block in data.blocks:` + `type(block).__name__` to find block types
-
-## PyNifly (modern NIF lib — BSTriShape + animation authoring)
-
-Installed at `tools/pynifly/io_scene_nifly/pyn/` (BadDogSkyrim PyNifly; prebuilt `NiflyDLL.dll` ships with it — no Blender, no compile; plain Python 3.10/3.12 x64). It wraps ousnius/nifly, the library behind BodySlide/Outfit Studio.
-
-```python
-import sys, os
-sys.path.insert(0, "tools/pynifly/io_scene_nifly")
-from pyn import pynifly      # import as the package, NOT `import pynifly`
-pynifly.NifFile.Load(os.path.abspath("tools/pynifly/io_scene_nifly/pyn/NiflyDLL.dll"))
-nf = pynifly.NifFile(path)               # reads SSE BSTriShape AND LE NiTriShape
-[s.name for s in nf.shapes]; list(nf.nodes.keys())
-```
-
-**Use PyNifly for** the things PyFFI can't: any **BSTriShape (SSE)** NIF, and **all animation/controller authoring** — it has `.New()` factories for `NiControllerManager / NiControllerSequence / NiMultiTargetTransformController / NiTransformData / NiTransformInterpolator / NiDefaultAVObjectPalette / BSXFlags / NiTextKeyExtraData` that register header strings correctly (the exact thing PyFFI botches → CTD). This is what makes **self-spinning / telescoping / keyframe-animated effect meshes** possible (e.g. a `SpecialIdle`-named `NiControllerSequence` auto-loops on a placed Activator with zero scripting).
-
-**ALSO the validation gate:** after authoring/editing any NIF, cross-read it with PyNifly (an independent, battle-tested parser) before in-game testing — a clean PyNifly read catches malformed files that PyFFI's same-tool readback misses. Check the *specific* crashable subsystem (e.g. the controller), since a geometry-only read can pass even when the animation stack is malformed.
+★ **The working recipes live in the `skyrim-nif` skill — INVOKE IT** (`Skill: skyrim-nif`) for the
+PyFFI read/mutate/write block, the PyNifly import incantation, why PyFFI beats binary patching /
+NifSkope re-saves, and the key block-editing operations. It is path-scoped to
+`**/*.nif,Data/meshes/**`, so it is listed automatically when you touch a mesh — but listing is not
+loading: you must invoke it.
 
 ## NIF Validation & Render Verification
 

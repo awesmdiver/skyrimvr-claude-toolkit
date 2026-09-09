@@ -1,5 +1,62 @@
 # Changelog
 
+## Unreleased
+
+### 🔒 Security / safety
+
+- **`hook-canary.sh` could never go back to green: one blind event pinned it red forever.** It
+  branched on the existence of a `.blind` marker and never compared it against the good heartbeat,
+  so a single legitimate empty-payload invocation reported BLIND permanently — measured with good
+  heartbeats 107 seconds newer while the hooks were receiving 900+ byte payloads. An instrument
+  stuck red gets ignored, which is the same end state as no instrument. Now compares timestamps and
+  reports `ALIVE ... (recovered; blind at <ts>)` so the history is surfaced rather than swallowed.
+
+- **Hook budgets raised 30s → 60s (`PreToolUse`) and 30s → 120s (`SessionStart`).** v3.9 raised them
+  from 5s after establishing that a late refusal is discarded; measurement since shows the slowest
+  successful run of any hook is 557 ms, so 60s is a ~100x margin rather than the ~7x that 30s gave.
+
+### 📉 Corrections to what v3.9 claimed
+
+- **v3.9's closing claim that "the real fix is the ~20 forking `echo | grep` pipelines" is
+  withdrawn.** In-hook instrumentation measured `protect-bash.sh`'s entire body at **375 ms median**
+  (max 465 ms) and its `INPUT=$(cat)` stdin read at **13 ms**. Removing ~35 forks would buy roughly
+  250 ms against a 60,000 ms budget. The refactor was planned, priced against real data, and
+  dropped — it would have rewritten the matching core of a 313-line delete guard for an
+  unmeasurable gain.
+
+### 🧰 Release process
+
+- **The Nexus pack now has one home and one shape, enforced by a script and a test.**
+  Across eleven releases it landed in six shapes and four places: v3.5 and v3.5.3 shipped
+  EMPTY directories, `nexus-v3.8/` holds a zip named 3.8.1, and v3.9 split in two with the
+  real pack on a network share while the canonical home held only `UPLOAD-NOTES.txt`. Every
+  one passed review because nothing asserted the shape. `scripts/build-nexus-pack.sh`
+  produces the pack and refuses to report success on an incomplete one;
+  `tests/test_nexus_pack.py` asserts the shape.
+
+- **The pack's zip is downloaded from the GitHub release, never rebuilt.** The installable
+  bundle is built by CI from the tag with payload guards; a locally rebuilt zip could differ
+  silently from the one the release page serves.
+
+- **The changelog and description are passed in, not generated.** Extracting the `## <tag>`
+  block from CHANGELOG.md yielded 147 lines of raw markdown where the pasteable version was
+  63 — the Nexus box renders a flat list, so it is a rewrite, not an extract.
+
+### 📚 Documentation
+
+- **PyFFI/PyNifly recipes moved out of the always-loaded `CLAUDE.md` into the path-scoped
+  `skyrim-nif` skill.** The HARD LIMITS stay in `CLAUDE.md` — a "never do X" rule must not sit
+  behind a loading condition. `CLAUDE.md` drops 2,200 chars.
+
+### ⚠ Known, not fixed
+
+- **A hook run from the wrong directory resolves a plausible-but-wrong install root and silently
+  allows.** `protect-bash.sh` derives its root from its own location; a byte-identical copy run from
+  elsewhere returns zero bytes (= allow) for a command the same file at its real location correctly
+  denies. `hook-canary.sh` still reports such a hook ALIVE, because it is running and receiving its
+  payload. The obvious hardening ("deny unless the root looks like a Skyrim install") would break
+  this repo, which carries these hooks and is not a game install.
+
 ## v3.9
 
 ### 🔒 Security / safety — read this one

@@ -603,10 +603,31 @@ MUTATIONS = [
     # and this release leads with that fix -- guarded, until now, by nothing.
     pytest.param(
         ".claude/settings.json",
-        '"command": "bash \\"$CLAUDE_PROJECT_DIR/.claude/hooks/protect-bash.sh\\"",\n            "timeout": 30,',
+        '"command": "bash \\"$CLAUDE_PROJECT_DIR/.claude/hooks/protect-bash.sh\\"",\n            "timeout": 60,',
         '"command": "bash \\"$CLAUDE_PROJECT_DIR/.claude/hooks/protect-bash.sh\\"",\n            "timeout": 5,',
         "tests/test_repo_invariants.py::test_every_registered_hook_has_a_timeout_that_is_not_the_old_five_seconds",
         id="hook-timeouts-are-not-the-old-five-seconds",
+    ),
+    # Pin the canary red forever again: report BLIND on the mere existence of a
+    # marker, without asking whether a good payload arrived since. An instrument
+    # that cannot go back to green gets ignored, which is the same end state as
+    # having no instrument at all.
+    pytest.param(
+        "tools/hook-canary.sh",
+        '  if [ -f "$HB/$h.blind" ] && { [ -z "$blind_ts" ] || [ -z "$good_ts" ] || [[ "$blind_ts" > "$good_ts" ]]; }; then',
+        '  if [ -f "$HB/$h.blind" ]; then',
+        "tests/test_hook_canary.py::test_a_hook_that_recovered_reads_green_again",
+        id="canary-can-go-back-to-green",
+    ),
+    # Swallow a truncated .blind marker instead of failing loud on it. The one
+    # signal this tool exists to give would then depend on the marker being
+    # well-formed at the moment the hook was starved.
+    pytest.param(
+        "tools/hook-canary.sh",
+        '[ -z "$blind_ts" ] || [ -z "$good_ts" ]',
+        '[ -z "$good_ts" ]',
+        "tests/test_hook_canary.py::test_a_real_blind_event_is_reported",
+        id="canary-unparseable-blind-fails-loud",
     ),
     # Write the paths file double-quoted again: a `$` in a legal Windows folder name
     # then vanishes at source time and the install is silently unguarded.

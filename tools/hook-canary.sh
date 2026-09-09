@@ -50,10 +50,25 @@ alive_count=0
 idle_count=0
 
 for h in $HOOKS; do
+  blind_ts=""
+  [ -f "$HB/$h.blind" ] && blind_ts=$(cut -d' ' -f1 < "$HB/$h.blind")
+  good_ts=""
+  [ -f "$HB/$h" ] && good_ts=$(cut -d' ' -f1 < "$HB/$h")
+
   # A blind marker is the loud case: the hook RAN and got nothing. That is the
   # original defect, and it must never read as "fine".
-  if [ -f "$HB/$h.blind" ]; then
-    printf '  %-22s BLIND        ran but received NO payload (%s)\n' "$h" "$(cut -d' ' -f1 < "$HB/$h.blind")"
+  #
+  # But it is only CURRENT if no good payload has arrived SINCE. Both markers are
+  # written as YYYYMMDD_HHMMSS, so a lexical compare is a chronological one -- no
+  # date parsing, no extra forks. MEASURED 2026-09-09: without this, two .blind
+  # markers left by an empty-payload test pinned protect-bash and protect-files to
+  # BLIND while their good heartbeats were 107 SECONDS NEWER and the hooks were
+  # demonstrably receiving 900+ byte payloads. A canary that cannot go back to
+  # green is a canary that gets ignored, which is the same end state as no canary.
+  # An existing .blind whose timestamp will not parse is treated as CURRENT, not ignored:
+  # a truncated marker must fail LOUD. Only a good heartbeat that is provably NEWER clears it.
+  if [ -f "$HB/$h.blind" ] && { [ -z "$blind_ts" ] || [ -z "$good_ts" ] || [[ "$blind_ts" > "$good_ts" ]]; }; then
+    printf '  %-22s BLIND        ran but received NO payload (%s)\n' "$h" "$blind_ts"
     blind_count=$((blind_count + 1))
     continue
   fi
@@ -77,7 +92,11 @@ for h in $HOOKS; do
     printf '  %-22s STALE          last payload %s min ago (%s bytes)\n' "$h" "$age" "$bytes"
     idle_count=$((idle_count + 1))
   else
-    printf '  %-22s ALIVE          %s bytes, %s min ago\n' "$h" "$bytes" "$age"
+    if [ -n "$blind_ts" ]; then
+      printf '  %-22s ALIVE          %s bytes, %s min ago (recovered; blind at %s)\n' "$h" "$bytes" "$age" "$blind_ts"
+    else
+      printf '  %-22s ALIVE          %s bytes, %s min ago\n' "$h" "$bytes" "$age"
+    fi
     alive_count=$((alive_count + 1))
   fi
 done

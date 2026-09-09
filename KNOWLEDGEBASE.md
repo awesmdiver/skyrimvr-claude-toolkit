@@ -1793,3 +1793,53 @@ install". It may well exist. Don't assume its absence.
 and honour `$PLUGINS_TXT`, `$PAPYRUS_LOG_DIR`, `$SKSE_CRASH_DIR`. Silently picking the first
 hit is the same class of bug as reading the wrong half of the crash logs (above): a confident
 answer about an install you are not modding.
+
+## `paths:` in SKILL.md gates LISTING, not loading
+
+MEASURED 2026-09-09. Reading a `.psc` under `Data/` produced *"The following skills are available
+for use with the Skill tool: skyrim-context"* — the skill became **invocable**; its body did **not**
+enter context. A description that says "Auto-loads when working with X" is describing an intention,
+not the mechanism.
+
+**Consequence for any `CLAUDE.md` → skill migration:** the root file must keep an explicit *invoke*
+pointer. Without one, a future session sees no mention of the knowledge and concludes it does not
+exist — the migration silently deletes the guidance instead of deferring it. Never migrate a
+"never do X" rule this way at all.
+
+## A guard at the wrong depth resolves a wrong root and silently allows
+
+MEASURED 2026-09-09, same file, two locations, same payload. `protect-bash.sh` derives its install
+root from its own location (`$(dirname "$_SELF")/../..`). Run from its real location it correctly
+DENIES an `rm -rf` of the game install. A **byte-identical copy** run from a temp directory returns
+**zero bytes** — and zero bytes is read as ALLOW.
+
+The documented invariant is *"no root resolvable → DENY"*. It does not cover **root resolvable but
+wrong**, which is the more dangerous case because nothing errors. `hook-canary.sh` reports such a
+hook ALIVE, correctly: it *is* running and it *is* receiving its payload.
+
+This matters here because users extract the bundle themselves, and a wrong depth is silent. Not yet
+fixed: the obvious check ("deny unless the root looks like a Skyrim install") would break this
+repository, which ships these hooks and is not a game install.
+
+## Hook timeout economics — measure before optimising the guard
+
+MEASURED 2026-09-09 with zero-fork in-hook markers (`EPOCHREALTIME` + `printf`, both bash builtins,
+so the instrument does not perturb what it measures):
+
+| hook | stdin read | body median | body max |
+|---|---|---|---|
+| `protect-bash.sh` | 13.0 ms | 372.9 ms | 465.2 ms |
+| `snapshot-before-tool.sh` | 13.1 ms | 531.5 ms | 557.2 ms |
+| `protect-files.sh` | 14.1 ms | 209.1 ms | 215.9 ms |
+| `backup-before-edit.sh` | 13.8 ms | 113.7 ms | 123.0 ms |
+
+Two conclusions. **The `INPUT=$(cat)` stdin read is ~3% of the cost** — bounding it saves nothing on
+the normal path. And **fork reduction cannot be justified against a 60s budget**: the whole of
+`protect-bash` is 375 ms.
+
+⚠ **The observed timeouts do not live on this distribution.** Successful runs cap at ~8.2 s across
+250 transcripts while every timeout is ≥10 s, with nothing in between. Either the process is not
+starting at all (see [claude-code#77078](https://github.com/anthropics/claude-code/issues/77078) —
+hook processes left suspended, `UserProcessorTime = 00:00:00`, OPEN with no known root cause), or
+`durationMs` is measured differently for a cancellation than for a success. **That question is
+unresolved** — do not treat the fork count as the explanation.
