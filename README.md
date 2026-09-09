@@ -25,7 +25,7 @@ It's not perfect, and it will require some trial and error — especially for co
 A hook whose answer arrives after its `timeout` has that refusal **discarded** — the
 command runs. That is undocumented, and it was measured here in both permission modes.
 Three of the four hooks were configured 5 seconds (the fourth, 15) while `protect-bash.sh` measured 4,620 ms under
-load, so a busy machine could quietly disarm the delete guard. All hooks are now 30s,
+load, so a busy machine could quietly disarm the delete guard. All hooks are now 60s,
 which is a safety setting rather than a comfort one. ⚠ `hook-canary.sh` cannot detect
 this class: the hook is alive and does receive its payload — it just answers too late.
 
@@ -437,6 +437,18 @@ A: Download the new version from Nexus and extract over the old one, then re-run
 Since v3.9 a SessionStart hook also copies `KNOWLEDGEBASE.md`, `KNOWLEDGEBASE.local.md` and `CLAUDE.md` into `.claude/backups/kb/` whenever they change, and says so loudly at the start of the next session if one of them vanished, emptied, or lost more than half its bytes — which is what extracting an update over your install looks like from the inside. Run it yourself any time with `bash tools/kb-guard.sh --verbose`. Note the honest limit: an update that replaces your 100 KB knowledgebase with a 140 KB shipped one shrinks nothing and raises no alarm. The stored copy is the protection; the alarm is a convenience on top of it.
 
 ---
+
+## Releasing (maintainer)
+
+The GitHub release is built by `.github/workflows/release.yml` from the tag. The **Nexus upload
+pack** is built by `scripts/build-nexus-pack.sh <tag> <changelog.txt> <description.txt>`, which
+downloads the published release asset rather than rebuilding it, records its sha256 and size, and
+**refuses to report success on an incomplete pack**. `tests/test_nexus_pack.py` asserts the shape.
+
+The changelog and mod-page description are passed in, not generated: extracting a version block
+from `CHANGELOG.md` yields raw markdown, while the Nexus box renders a flat list and wants one
+issue per line. Nexus has no write API for files or the description, so the upload itself is always
+manual.
 
 ## Contributing
 

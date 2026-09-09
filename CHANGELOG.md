@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v3.9.1
 
 ### 🔒 Security / safety
 
@@ -8,12 +8,29 @@
   branched on the existence of a `.blind` marker and never compared it against the good heartbeat,
   so a single legitimate empty-payload invocation reported BLIND permanently — measured with good
   heartbeats 107 seconds newer while the hooks were receiving 900+ byte payloads. An instrument
-  stuck red gets ignored, which is the same end state as no instrument. Now compares timestamps and
-  reports `ALIVE ... (recovered; blind at <ts>)` so the history is surfaced rather than swallowed.
+  stuck red gets ignored, which is the same end state as no instrument.
 
-- **Hook budgets raised 30s → 60s (`PreToolUse`) and 30s → 120s (`SessionStart`).** v3.9 raised them
-  from 5s after establishing that a late refusal is discarded; measurement since shows the slowest
-  successful run of any hook is 557 ms, so 60s is a ~100x margin rather than the ~7x that 30s gave.
+  A blind marker is now CURRENT unless a **well-formed** marker is followed by a **strictly
+  newer** good heartbeat. The first attempt at this fix cleared too eagerly and the release
+  review caught it: EQUAL timestamps read green (same second proves no ordering), and a
+  truncated marker like `20260909_15` sorts BELOW a real stamp and so read green too.
+
+- **A recovered hook now reports `RECOVERED`, not `ALIVE`, and is counted separately.** For
+  `backup-before-edit.sh` and `snapshot-before-tool.sh` -- which exit 0 silently on an empty
+  payload -- this report is the only place intermittent starvation could ever surface, so
+  folding "was blind, then recovered" into a green line hid it. Exit code stays 0: the hook IS
+  working now, and saying otherwise is the false positive that gets an instrument ignored.
+
+- **Known limit:** clock skew is out of reach by construction. No pair of timestamps can reveal
+  a non-monotonic clock, so a heartbeat written after a clock step can still read as a recovery.
+
+- **Hook budgets raised 30s → 60s (`PreToolUse`) and 30s → 120s (`SessionStart`).** v3.9 raised them from 5s after
+  establishing that a late refusal is discarded. Two measurements bound the headroom and
+  they disagree, so both are stated: in-hook instrumentation puts the slowest hook body at
+  **557 ms**, while the worst `hook_success` duration across 250 transcripts is **8.2 s**.
+  Against the pessimistic figure 60s is a ~7x margin — the same ratio 30s gave against the
+  4,620 ms that motivated raising it — so this is headroom, not a fix. **SessionStart was
+  already 120s before this arc**; only the four PreToolUse entries changed here.
 
 ### 📉 Corrections to what v3.9 claimed
 

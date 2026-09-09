@@ -48,6 +48,7 @@ now=$(date +%s)
 blind_count=0
 alive_count=0
 idle_count=0
+recovered_count=0
 
 for h in $HOOKS; do
   blind_ts=""
@@ -65,9 +66,27 @@ for h in $HOOKS; do
   # BLIND while their good heartbeats were 107 SECONDS NEWER and the hooks were
   # demonstrably receiving 900+ byte payloads. A canary that cannot go back to
   # green is a canary that gets ignored, which is the same end state as no canary.
-  # An existing .blind whose timestamp will not parse is treated as CURRENT, not ignored:
-  # a truncated marker must fail LOUD. Only a good heartbeat that is provably NEWER clears it.
-  if [ -f "$HB/$h.blind" ] && { [ -z "$blind_ts" ] || [ -z "$good_ts" ] || [[ "$blind_ts" > "$good_ts" ]]; }; then
+  # A blind marker is CURRENT unless a good heartbeat proves the hook recovered
+  # AFTER it. Three ways that proof can be absent, all MEASURED as false greens
+  # before this was tightened:
+  #   * the timestamps are EQUAL       -- same second proves no ordering
+  #   * the good one is OLDER          -- a clock stepped back must not read as recovery
+  #   * the marker will not parse      -- a truncated `20260909_15` sorts BELOW a real
+  #                                       stamp, so a lexical compare silently cleared it
+  # Only a well-formed marker with a STRICTLY newer good heartbeat clears. This
+  # matters most for backup-before-edit and snapshot-before-tool, which exit 0
+  # silently on an empty payload: for those two this report is the only detector.
+  blind_current=0
+  if [ -f "$HB/$h.blind" ]; then
+    blind_current=1
+    case "$blind_ts" in
+      [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9])
+        # well-formed: a strictly newer good heartbeat, and only that, clears it
+        if [ -n "$good_ts" ] && [[ "$good_ts" > "$blind_ts" ]]; then blind_current=0; fi
+        ;;
+    esac
+  fi
+  if [ "$blind_current" -eq 1 ]; then
     printf '  %-22s BLIND        ran but received NO payload (%s)\n' "$h" "$blind_ts"
     blind_count=$((blind_count + 1))
     continue
@@ -93,16 +112,20 @@ for h in $HOOKS; do
     idle_count=$((idle_count + 1))
   else
     if [ -n "$blind_ts" ]; then
-      printf '  %-22s ALIVE          %s bytes, %s min ago (recovered; blind at %s)\n' "$h" "$bytes" "$age" "$blind_ts"
+      # Not ALIVE: a hook that was starved once can be starved again, and this line is
+      # the only surface on which that would ever appear for the two hooks that exit 0
+      # silently. Exit stays 0 -- it IS working now.
+      printf '  %-22s RECOVERED      %s bytes, %s min ago -- but WAS BLIND at %s\n' "$h" "$bytes" "$age" "$blind_ts"
+      recovered_count=$((recovered_count + 1))
     else
       printf '  %-22s ALIVE          %s bytes, %s min ago\n' "$h" "$bytes" "$age"
+      alive_count=$((alive_count + 1))
     fi
-    alive_count=$((alive_count + 1))
   fi
 done
 
 echo "--------------------------------------------------------------"
-echo "alive: $alive_count   blind: $blind_count   not-exercised/stale: $idle_count"
+echo "alive: $alive_count   recovered-after-blind: $recovered_count   blind: $blind_count   not-exercised/stale: $idle_count"
 if [ "$blind_count" -gt 0 ]; then
   echo
   echo "RESULT: BLIND HOOK(S) -- a guard is running and seeing nothing, which is"
@@ -112,7 +135,7 @@ if [ "$blind_count" -gt 0 ]; then
   echo "        that setup.sh has filled in its path."
   exit 1
 fi
-if [ "$alive_count" -eq 0 ]; then
+if [ "$alive_count" -eq 0 ] && [ "$recovered_count" -eq 0 ]; then
   echo
   echo "RESULT: UNPROVEN -- no hook has recorded a payload yet. Trigger one tool call"
   echo "        of each kind (a Bash command and a file edit) and re-run."

@@ -29,10 +29,12 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 die() { printf 'REFUSED: %s\n' "$1" >&2; exit 1; }
 
-case "$TAG" in
-    v[0-9]*) ;;
-    *) die "first argument must be a tag like v3.9 (got '${TAG:-<none>}')" ;;
-esac
+# Anchored and dot-segment-free: `v[0-9]*` accepted `/` and `..`, and MEASURED,
+# a tag of 'v9/../../../ESCAPED' created a directory as a SIBLING of the pack
+# root before the download refused. Refuse the shape, not just the prefix.
+if ! printf '%s' "$TAG" | grep -qE '^v[0-9]+(\.[0-9]+)*$'; then
+    die "first argument must be a tag like v3.9 (got '${TAG:-<none>}')"
+fi
 VERSION="${TAG#v}"
 
 # --- where the pack goes -----------------------------------------------------
@@ -75,6 +77,12 @@ the release may name its asset differently, which would also mean the folder and
 
 SHA=$(sha256sum "$DEST/$ZIP_NAME" | cut -d' ' -f1)
 SIZE=$(wc -c < "$DEST/$ZIP_NAME" | tr -d ' ')
+# The completeness gate below checks that files are non-empty, not that their
+# CONTENTS are. MEASURED with a failing sha256sum on PATH: the manifest shipped
+# `sha256` blank and the run still reported PACK COMPLETE -- a blank hash in the
+# one file the pack calls "evidence of what was published".
+[ -n "$SHA" ] || die "could not hash $ZIP_NAME -- refusing to ship a manifest with no checksum"
+[ -n "$SIZE" ] || die "could not size $ZIP_NAME -- refusing to ship a manifest with no size"
 
 # --- 2. the changelog, AUTHORED not extracted --------------------------------
 # MEASURED 2026-09-09: extracting the `## <tag>` block straight out of CHANGELOG.md
@@ -158,10 +166,18 @@ for f in "$ZIP_NAME" "NEXUS-CHANGELOG-$TAG.txt" "NEXUS-DESCRIPTION-$TAG.txt" "RE
 done
 [ "$missing" -eq 0 ] || die "$missing required file(s) missing from $DEST -- the changelog and description are AUTHORED, not generated: build-nexus-pack.sh <tag> <changelog.txt> <description.txt>"
 
-case "$ZIP_NAME" in
-    *"-$VERSION.zip") ;;
-    *) die "zip name '$ZIP_NAME' does not carry version $VERSION -- folder and zip disagree" ;;
-esac
+# The previous form tested ZIP_NAME against the VERSION it was constructed from,
+# so it could never fail, while its comment claimed it would have caught
+# `nexus-v3.8/` holding a 3.8.1 zip. Compare against what the release ACTUALLY
+# put on disk, which is a check that can go red.
+landed=$(ls -1 "$DEST"/*.zip 2>/dev/null | wc -l | tr -d ' ')
+if [ "$landed" != "1" ]; then
+    die "$landed zip(s) in $DEST -- expected exactly $ZIP_NAME; a stray asset would ship as part of the pack"
+fi
+actual=$(basename "$(ls -1 "$DEST"/*.zip)")
+if [ "$actual" != "$ZIP_NAME" ]; then
+    die "release $TAG published '$actual' but this pack is named for $VERSION -- folder and zip disagree"
+fi
 
 printf '\nPACK COMPLETE: %s\n' "$DEST"
 ls -1 "$DEST" | sed 's/^/  /'

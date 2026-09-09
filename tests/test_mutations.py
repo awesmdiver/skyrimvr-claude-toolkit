@@ -614,9 +614,9 @@ MUTATIONS = [
     # having no instrument at all.
     pytest.param(
         "tools/hook-canary.sh",
-        '  if [ -f "$HB/$h.blind" ] && { [ -z "$blind_ts" ] || [ -z "$good_ts" ] || [[ "$blind_ts" > "$good_ts" ]]; }; then',
-        '  if [ -f "$HB/$h.blind" ]; then',
-        "tests/test_hook_canary.py::test_a_hook_that_recovered_reads_green_again",
+        'if [ -n "$good_ts" ] && [[ "$good_ts" > "$blind_ts" ]]; then blind_current=0; fi',
+        'if false; then blind_current=0; fi',
+        "tests/test_hook_canary.py::test_a_proven_recovery_reads_recovered_not_alive",
         id="canary-can-go-back-to-green",
     ),
     # Swallow a truncated .blind marker instead of failing loud on it. The one
@@ -624,10 +624,19 @@ MUTATIONS = [
     # well-formed at the moment the hook was starved.
     pytest.param(
         "tools/hook-canary.sh",
-        '[ -z "$blind_ts" ] || [ -z "$good_ts" ]',
-        '[ -z "$good_ts" ]',
-        "tests/test_hook_canary.py::test_a_real_blind_event_is_reported",
-        id="canary-unparseable-blind-fails-loud",
+        '      [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9])',
+        '      *)',
+        "tests/test_hook_canary.py::test_an_unproven_recovery_stays_blind",
+        id="canary-malformed-marker-cannot-clear",
+    ),
+    # Third clause: make the comparison non-strict, so EQUAL timestamps count as
+    # proof of recovery. Same second proves no ordering at all.
+    pytest.param(
+        "tools/hook-canary.sh",
+        '[[ "$good_ts" > "$blind_ts" ]]',
+        '[[ ! "$good_ts" < "$blind_ts" ]]',
+        "tests/test_hook_canary.py::test_an_unproven_recovery_stays_blind",
+        id="canary-a-tie-is-not-a-recovery",
     ),
     # Write the paths file double-quoted again: a `$` in a legal Windows folder name
     # then vanishes at source time and the install is silently unguarded.
