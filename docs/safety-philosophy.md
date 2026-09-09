@@ -22,12 +22,18 @@ Before making any change, Claude is instructed to check the knowledgebase for kn
 Claude must explicitly rate its confidence (0-100%) before proposing any change and list assumptions. This forces investigation before action.
 
 ### Layer 3: Hook Guards
-Four bash scripts intercept Claude's tool calls:
+Five bash scripts intercept Claude's tool calls:
 
 - **protect-bash.sh** -- Blocks destructive commands, confirms file operations
 - **protect-files.sh** -- Blocks binary file writes, confirms all other edits
 - **backup-before-edit.sh** -- Copies every file before modification
 - **snapshot-before-tool.sh** -- Snapshots active Papyrus source/compiled scripts before any Bash command
+- **session-kb-guard.sh** -- At SessionStart, copies the files nothing can rebuild
+  (`KNOWLEDGEBASE.md`, `KNOWLEDGEBASE.local.md`, `CLAUDE.md`) and raises an alarm if
+  one shrank. It exists because the first four all key on a *tool call*, and the
+  knowledgebase is usually written by a script run through Bash -- invisible to an
+  Edit/Write hook. Measured on the author's install: zero knowledgebase backups in
+  seven months, with the backup hook working correctly throughout.
 
 ### Layer 4: Dry-Run Convention
 ESP modifications via xelib always use a two-pass workflow: read-only preview, then write only after human approval.

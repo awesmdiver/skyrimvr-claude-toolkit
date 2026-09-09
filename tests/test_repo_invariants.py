@@ -5,6 +5,7 @@ Both checks here exist because the failure they catch is silent.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 
@@ -211,6 +212,34 @@ def test_every_hook_is_configured_by_setup_and_carries_one_placeholder():
         if h.name not in setup:
             problems.append(f"{h.name}: not named in setup.sh, so it ships unconfigured")
     assert not problems, "\n  " + "\n  ".join(problems)
+
+
+def test_every_hook_is_registered_in_settings_json():
+    """A hook file that no event invokes is decoration, and it is the quietest
+    possible failure: it passes every other check in this file -- it reads stdin
+    correctly, writes a heartbeat, carries one placeholder, is named in setup.sh --
+    and never runs, because nothing in settings.json points at it.
+
+    `hook-canary.sh` cannot tell you either: an unregistered hook writes no
+    heartbeat, which the canary reports as NOT EXERCISED, the same thing it says
+    about an Edit hook in a Bash-only session. Registration is a property of the
+    two files together, so it is asserted here rather than hoped for.
+    """
+    settings = json.loads((REPO / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    commands = [
+        entry.get("command", "")
+        for matchers in settings.get("hooks", {}).values()
+        for matcher in matchers
+        for entry in matcher.get("hooks", [])
+    ]
+    assert commands, "settings.json registers no hooks at all"
+
+    hooks = sorted(HOOK_DIR.glob("*.sh"))
+    assert hooks, "no hooks found -- this test would pass vacuously"
+    unwired = [h.name for h in hooks if not any(h.name in c for c in commands)]
+    assert not unwired, (
+        "these hooks ship but no event invokes them, so they never run: "
+        + ", ".join(unwired))
 
 
 def test_the_users_knowledgebase_is_never_shipped_and_is_where_writes_go():

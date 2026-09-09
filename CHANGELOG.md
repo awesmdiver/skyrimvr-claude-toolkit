@@ -36,6 +36,35 @@
   The README FAQ said "Your knowledgebase additions are preserved". That sentence was
   false for as long as it has existed, and it is corrected.
 
+- **New: `session-kb-guard.sh` + `tools/kb-guard.sh` — a copy of the files nothing can
+  rebuild, taken before anything can overwrite them.** The change above protects
+  accumulation that has not happened yet. This covers the install you already have: at
+  **SessionStart**, `KNOWLEDGEBASE.md`, `KNOWLEDGEBASE.local.md` and `CLAUDE.md` are
+  copied into `.claude/backups/kb/<stamp>/` whenever their content changed, and a file
+  that vanishes, empties, or loses more than half its bytes raises an alarm naming the
+  stored copy to recover from.
+
+  It is a separate mechanism because the existing backup hook could not have covered
+  this. `backup-before-edit.sh` fires on Edit/Write tool calls and works correctly —
+  but a knowledgebase is usually written by a script run through **Bash**, which an
+  Edit/Write hook structurally cannot see. MEASURED on the author's install: **zero
+  `KNOWLEDGEBASE.md` backups across seven months**, of a 120 KB file, with nothing
+  anywhere reporting it. (An earlier draft of this entry blamed the five-week
+  inert-hook window; that was wrong, and reading the backup hook in full disproved it.)
+
+  ⚠ **The snapshot is the protection; the alarm is a convenience on top of it.** An
+  update that replaces a 100 KB knowledgebase with a 140 KB shipped one is a total
+  loss that shrinks nothing and will not alarm.
+
+  ⚠ **The rotation never prunes the oldest, the newest, or the largest stored copy of
+  a watched file.** Every session after an unnoticed loss snapshots the damaged file,
+  so a plain oldest-first rotation walks the good copy off the end a few sessions
+  later — worse than having no store, because it looks like protection the whole time.
+  Both clauses have their own test and their own mutation; the first version of that
+  test covered only one of them and the mutation gate said so.
+
+  Run it by hand any time: `bash tools/kb-guard.sh --verbose`.
+
 ### Fixed
 
 - **The delete guard treated any path containing the word "Skyrim" as your game

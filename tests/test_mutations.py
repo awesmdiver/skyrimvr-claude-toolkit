@@ -566,6 +566,70 @@ MUTATIONS = [
         "tests/test_skyrim_paths.py::test_ambiguity_warns_naming_winner_loser_and_the_override",
         id="game-dir-warning-silenced",
     ),
+
+    # --- the knowledgebase guard --------------------------------------------
+    # Put back the collision: the snapshot directory is named to the second, so two
+    # runs inside one second shared it and the second `cp` overwrote the first. Found
+    # by a probe while building the tool, which is the only reason it is a test.
+    pytest.param(
+        "tools/kb-guard.sh",
+        'while [ -d "$STORE/$STAMP" ]; do',
+        "while false; do",
+        "tests/test_kb_guard.py::test_two_runs_in_the_same_second_do_not_overwrite_each_other",
+        id="kb-guard-snapshot-stamps-are-unique",
+    ),
+    # Let the rotation prune the largest stored copy. Every session after an
+    # extract-over snapshots the truncated file, so an oldest-first prune walks the
+    # one full-size copy off the end a few sessions later -- a backup store that
+    # destroys the thing it exists to protect while still looking like a store.
+    pytest.param(
+        "tools/kb-guard.sh",
+        '        [ -n "$best" ] && protected+=("$best")',
+        "        :",
+        "tests/test_kb_guard.py::test_rotation_never_prunes_the_largest_copy",
+        id="kb-guard-rotation-protects-the-largest-copy",
+    ),
+    # The other clause of the same compound rule, which needs its own mutation for
+    # the same reason it needs its own test: each protection shadows the others, so
+    # one twin only ever proves the first one it trips.
+    pytest.param(
+        "tools/kb-guard.sh",
+        'local protected=("${dirs[0]}" "${dirs[$(( ${#dirs[@]} - 1 ))]}")',
+        'local protected=("${dirs[$(( ${#dirs[@]} - 1 ))]}")',
+        "tests/test_kb_guard.py::test_rotation_never_prunes_the_oldest_copy",
+        id="kb-guard-rotation-protects-the-oldest-copy",
+    ),
+    # Let the guard's exit status reach the session. SessionStart runs this, so a
+    # lost knowledgebase would become a session that reports an error at startup --
+    # the guard is allowed to be loud, not to break the thing it guards.
+    pytest.param(
+        ".claude/hooks/session-kb-guard.sh",
+        'OUTPUT=$(bash "$TOOL" 2>&1)',
+        'OUTPUT=$(bash "$TOOL" 2>&1) || exit 1',
+        "tests/test_kb_guard.py::test_the_hook_never_fails_the_session_even_when_the_guard_alarms",
+        id="kb-guard-hook-never-fails-the-session",
+    ),
+    # Take away the words. The exit code still says 2, so anything reading the status
+    # is unaffected -- but a user watching a session start sees nothing at all, which
+    # is the silence this whole class of bug hides in.
+    pytest.param(
+        "tools/kb-guard.sh",
+        '    echo "KB GUARD: NOT RUN -- none of the watched files exist under $ROOT ($WATCHED)" >&2',
+        "    :",
+        "tests/test_kb_guard.py::test_an_install_with_nothing_to_watch_says_NOT_RUN_rather_than_nothing",
+        id="kb-guard-says-not-run-out-loud",
+    ),
+    # Unregister the hook. It still ships, still reads stdin correctly, still writes a
+    # heartbeat, is still named in setup.sh -- and never runs, because no event points
+    # at it. hook-canary.sh reports that as NOT EXERCISED, indistinguishable from an
+    # Edit hook in a Bash-only session.
+    pytest.param(
+        ".claude/settings.json",
+        "session-kb-guard.sh",
+        "protect-bash.sh",
+        "tests/test_repo_invariants.py::test_every_hook_is_registered_in_settings_json",
+        id="every-hook-is-wired-into-settings-json",
+    ),
 ]
 
 

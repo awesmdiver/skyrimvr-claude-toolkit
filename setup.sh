@@ -298,7 +298,7 @@ fi
 # --- Configure hook scripts (replace jq placeholder) ---
 echo ""
 echo "Configuring safety hooks..."
-for hook in protect-bash.sh protect-files.sh backup-before-edit.sh snapshot-before-tool.sh; do
+for hook in protect-bash.sh protect-files.sh backup-before-edit.sh snapshot-before-tool.sh session-kb-guard.sh; do
     if grep -q '{{JQ_PATH}}' "$GAME_DIR/.claude/hooks/$hook"; then
         sed -i "s|{{JQ_PATH}}|$JQ_PATH|g" "$GAME_DIR/.claude/hooks/$hook"
         echo "  Configured: .claude/hooks/$hook"
@@ -444,6 +444,7 @@ echo "  .claude/hooks/protect-bash.sh    -- Guards dangerous commands"
 echo "  .claude/hooks/protect-files.sh   -- Guards file edits"
 echo "  .claude/hooks/backup-before-edit.sh -- Auto-backups (Edit/Write) with audit trail"
 echo "  .claude/hooks/snapshot-before-tool.sh -- Auto-snapshots .psc/.pex before Bash commands"
+echo "  .claude/hooks/session-kb-guard.sh -- Snapshots KNOWLEDGEBASE/CLAUDE.md once per session"
 echo "  tools/                           -- Helper scripts (AutoMod wrapper, esp-verify, NIF tools, nexus.sh, resaver-cli.sh)"
 echo "  .claude/backups/                 -- Backup storage (empty for now)"
 echo ""

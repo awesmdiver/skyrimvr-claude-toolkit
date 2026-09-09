@@ -75,7 +75,7 @@ jobs:
           # works. Same for the heartbeat, which a mere `grep -q` satisfied from a
           # COMMENT mentioning it.
           nhooks=$(find "/tmp/$NAME/.claude/hooks" -name '*.sh' | wc -l)
-          test "$nhooks" -ge 4 || { echo "::error::only $nhooks hook(s) in the payload; this check would be vacuous"; exit 1; }
+          test "$nhooks" -ge 5 || { echo "::error::only $nhooks hook(s) in the payload; this check would be vacuous"; exit 1; }
           # find, not a glob: `for h in dir/*.sh` is non-recursive and would skip a
           # hook in a subdirectory that `nhooks` had already counted.
           while IFS= read -r h; do
@@ -88,6 +88,10 @@ jobs:
           # install", and every doc surface tells the user to run it. Shipping the
           # references without the file is how this class of defect got here.
           test -f "/tmp/$NAME/tools/hook-canary.sh" || { echo "::error::tools/hook-canary.sh missing from the payload, but the docs tell users to run it"; exit 1; }
+          # session-kb-guard.sh is deliberately thin and DELEGATES to tools/kb-guard.sh.
+          # Ship the hook without the tool and every session prints "NOT RUN" -- which
+          # is honest, and still means nobody's knowledgebase is being snapshotted.
+          test -f "/tmp/$NAME/tools/kb-guard.sh" || { echo "::error::tools/kb-guard.sh missing from the payload; session-kb-guard.sh would report NOT RUN in every session"; exit 1; }
           echo "hooks: $nhooks shipped, all reading stdin correctly, all with a heartbeat, canary present"
           (cd /tmp && zip -qr "$NAME.zip" "$NAME")
           mv "/tmp/$NAME.zip" .

@@ -453,6 +453,29 @@ never ship a file it also asks you to edit.
 version, move them to `KNOWLEDGEBASE.local.md` now. Anything left in the shipped file
 is lost at the next update.
 
+### The copy that covers the install you already have
+
+The split above protects what has not been written yet. An install whose notes are
+*already* in the shipped file is covered by one thing only: a copy taken before the
+extract. `.claude/hooks/session-kb-guard.sh` takes that copy at **SessionStart**,
+delegating to `tools/kb-guard.sh`, which snapshots `KNOWLEDGEBASE.md`,
+`KNOWLEDGEBASE.local.md` and `CLAUDE.md` into `.claude/backups/kb/<stamp>/` whenever
+the content changed, and raises an alarm when one of them vanishes, empties, or loses
+more than half its bytes. Run it by hand any time: `bash tools/kb-guard.sh --verbose`.
+
+- ⚠ **The snapshot is the protection; the alarm is a convenience.** An update that
+  replaces a 100 KB knowledgebase with a 140 KB shipped one is a total loss that
+  shrinks nothing and raises no alarm. Recovery is always the stored copy.
+- ⚠ **Rotation never prunes the oldest, the newest, or the largest copy of a watched
+  file.** Every session after an unnoticed loss snapshots the damaged file, so a plain
+  oldest-first rotation would walk the good copy off the end — a store that destroys
+  what it exists to protect while still looking like a store.
+- **Why a separate mechanism at all**, when `backup-before-edit.sh` already exists:
+  that hook fires on Edit/Write tool calls, and the knowledgebase is usually written
+  through a script run via Bash, which an Edit/Write hook structurally cannot see.
+  MEASURED on this install 2026-09-08: **zero** `KNOWLEDGEBASE.md` backups across
+  seven months, with the backup hook working correctly the whole time.
+
 ## Top Gotchas (Always In Context)
 
 These are the most dangerous/common pitfalls. Consult `KNOWLEDGEBASE.md` for full details.

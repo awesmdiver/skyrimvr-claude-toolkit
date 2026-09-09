@@ -410,6 +410,8 @@ A: Download the new version from Nexus and extract over the old one, then re-run
 
 **Anything the toolkit ships is REPLACED by that extract, including `KNOWLEDGEBASE.md` and `CLAUDE.md`.** Earlier versions of this answer claimed your knowledgebase additions were preserved. They were not — the shipped file overwrote yours, which is exactly when a reassurance is worth least. Your own notes belong in **`KNOWLEDGEBASE.local.md`**, which the toolkit never ships and the release build refuses to contain; Claude is instructed to read both files and write only to that one. If you have notes sitting in `KNOWLEDGEBASE.md` from an older version, move them across before you update. `.claude/backups/`, `.claude/skyrim-paths.env` and `.claude/settings.local.json` are likewise not in the zip and survive.
 
+Since v3.8.4 a SessionStart hook also copies `KNOWLEDGEBASE.md`, `KNOWLEDGEBASE.local.md` and `CLAUDE.md` into `.claude/backups/kb/` whenever they change, and says so loudly at the start of the next session if one of them vanished, emptied, or lost more than half its bytes — which is what extracting an update over your install looks like from the inside. Run it yourself any time with `bash tools/kb-guard.sh --verbose`. Note the honest limit: an update that replaces your 100 KB knowledgebase with a 140 KB shipped one shrinks nothing and raises no alarm. The stored copy is the protection; the alarm is a convenience on top of it.
+
 ---
 
 ## Contributing
