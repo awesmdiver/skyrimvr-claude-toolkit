@@ -51,6 +51,14 @@ from conftest import REPO
 HOOKS = REPO / ".claude" / "hooks"
 BS = chr(92)
 
+#: The install these tests talk about. Defined HERE, above the fixture, because the
+#: fixture now has to declare it in `.claude/skyrim-paths.env`: protect-bash.sh resolves
+#: the real install root instead of matching the word "Skyrim" anywhere in a path, so a
+#: row naming some third directory would describe a place the hook has no reason to
+#: guard. One constant, used by the fixture and by every row, so the two cannot disagree.
+GAME = "C:/GOG Games/The Elder Scrolls V Skyrim VR"
+GAMEW = GAME.replace("/", BS)
+
 
 def _bash() -> str:
     """Git Bash by path, never `bash` from PATH.
@@ -82,6 +90,25 @@ def project(tmp_path_factory):
     for f in HOOKS.glob("*.sh"):
         text = f.read_text(encoding="utf-8").replace("{{JQ_PATH}}", jq.replace(BS, "/"))
         (root / ".claude" / "hooks" / f.name).write_text(text, encoding="utf-8", newline="\n")
+    # DECLARE THE INSTALL THE ASSERTIONS TALK ABOUT.
+    #
+    # protect-bash.sh no longer decides "is this the game" by looking for the word
+    # Skyrim in a path -- that matched the session scratchpad, this repo's own
+    # checkout, and C:/Temp/skyrim-notes.txt. It resolves the REAL install root from
+    # the hook's own location, plus whatever setup.sh recorded here.
+    #
+    # In this fixture the hook's location is a pytest tmp dir, so without this file the
+    # rows below -- which assert about `C:/GOG Games/...` -- would describe a directory
+    # the hook has no reason to guard, and every deletion row would (correctly) stop
+    # denying. Writing it also means the configured-paths arm is exercised rather than
+    # assumed; INSTALL_ROOT alone would never test it.
+    # Only the GAME root is declared. The config directory keeps a generic literal
+    # rule in the hook (`Documents/My Games/Skyrim`), because it lives OUTSIDE any
+    # install root and its INIs are not recoverable from a mod manager -- so it must
+    # be guarded even on a machine setup.sh has never configured.
+    (root / ".claude" / "skyrim-paths.env").write_text(
+        f'SKYRIM_GAME_ROOT="{GAME}"\n', encoding="utf-8", newline="\n",
+    )
     return root
 
 
@@ -144,16 +171,18 @@ def test_protect_files_decides(project, path, expected, why):
 # --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("command,expected,why", [
-    ('rm -rf "C:/Games/Skyrim VR"', "deny", "deleting the install"),
-    ('rm -rf "C:' + BS + 'Games' + BS + 'Skyrim VR"', "deny",
+    (f'rm -rf "{GAME}"', "deny", "deleting the install"),
+    (f'rm -rf "{GAMEW}"', "deny",
      "the backslash form -- cmd.exe and powershell are both callable, so this is "
      "the spelling that got through a forward-slash-only guard"),
-    ('rm -rf "/c/Games/Skyrim VR"', "deny", "the MSYS form"),
+    (f'rm -rf "/c/{GAME[3:]}"', "deny", "the MSYS form"),
     ('rm -rf "C:/Users/x/Documents/My Games/Skyrim VR"', "deny", "the config directory"),
     ('reg delete "HKLM' + BS + 'SOFTWARE' + BS + 'Bethesda"', "deny", "registry keys"),
-    ('Champollion.exe "C:/Games/Skyrim/Data/Scripts/A.pex"', "deny",
+    (f'Champollion.exe "{GAME}/Data/Scripts/A.pex"', "deny",
      "Champollion writes to Data/Scripts/Source regardless of flags and can leave "
-     "the output empty; this has destroyed a .psc twice"),
+     "the output empty; this has destroyed a .psc twice. Scoped to the LIVE install: "
+     "a .pex copied to a temp dir -- the remedy this refusal prescribes -- must not "
+     "itself be refused"),
     ('tool --output "C:/tmp/A.psc"', "deny", "output aimed straight at a source file"),
     # Controls. A guard that fires on these is one that gets deleted.
     ("ls -la", "allow", "plain ls"),
@@ -242,8 +271,6 @@ def test_every_hook_writes_a_liveness_heartbeat(project):
 # spelling of rm.
 # --------------------------------------------------------------------------
 
-GAME = "C:/GOG Games/The Elder Scrolls V Skyrim VR"
-GAMEW = GAME.replace("/", BS)
 
 
 @pytest.mark.parametrize("command,why", [
@@ -278,6 +305,37 @@ def test_the_install_cannot_be_deleted_however_it_is_spelled(project, command, w
     (f'cat "{GAME}/Data/x.esp"', "advise", "READING a game path is not deleting one"),
     (f'cp "{GAME}/Data/x.nif" /tmp/', "advise", "copying OUT is not deleting"),
     (f'ls "{GAME}/Data/Scripts"', "allow", "listing is not writing"),
+
+    # ---- paths that merely CONTAIN the word Skyrim, and are not the install ----
+    #
+    # The rule used to ask "does this command mention a path containing Skyrim", which
+    # matched all four of these. The scratchpad one bit five times in a single session:
+    # a Claude Code scratchpad path contains `C--GOG-Games-The-Elder-Scrolls-V-Skyrim-VR`,
+    # so tidying a temp file read as deleting the game.
+    #
+    # Note what these rows are NOT: they are not a scoping problem, and a shell parser
+    # would not fix them. It would bind the verb to its target correctly and still
+    # refuse, because the TARGET matches. That is why the rule resolves a real install
+    # root instead.
+    ("rm -rf \"C:/Users/x/AppData/Local/Temp/claude/"
+     "C--GOG-Games-The-Elder-Scrolls-V-Skyrim-VR/sess/scratchpad/tmp\"",
+     "allow", "the session SCRATCHPAD is not the install"),
+    ('rm -rf "C:/Users/x/Projects/skyrimvr-claude-toolkit/build"',
+     "allow", "this toolkit's own checkout is not the install"),
+    ('rm -rf "C:/Temp/skyrim-notes"',
+     "allow", "a temp file merely NAMED skyrim"),
+    ('git clone https://github.com/x/Open-Composite-Unleashed-for-Skyrim-VR.git /tmp/b',
+     "allow", "a repository whose NAME contains Skyrim VR"),
+
+    # Champollion is scoped to the live install, so the remedy its own refusal
+    # prescribes -- copy the .pex to a temp directory and run it there -- must work.
+    ('Champollion.exe "C:/Temp/work/Data/Scripts/A.pex"',
+     "allow", "a .pex copied OUT of the install is the prescribed workaround"),
+
+    # ...and the relative-Data advisory, which no resolved root can cover because a
+    # hook is never told the caller's working directory.
+    ("rm -rf Data/Meshes/x.nif", "advise", "a relative delete inside Data, with flags"),
+    ("rm mydata/cache.bin", "allow", "the word boundary: mydata is not Data"),
 ])
 def test_the_delete_rule_does_not_swallow_ordinary_work(project, command, expected, why):
     got, _ = fire(project, "protect-bash.sh", cmd(command))
@@ -321,6 +379,45 @@ def _hook_with_jq(project, tmp_path, name, jq_value):
     d.mkdir(parents=True, exist_ok=True)
     (d / name).write_text(src, encoding="utf-8", newline="\n")
     return d.parent.parent
+
+
+def test_the_delete_guard_refuses_when_it_cannot_locate_the_install(tmp_path):
+    """A guard that cannot work out WHICH directory the install is has evaluated
+    nothing, and must refuse rather than shrug.
+
+    The delete rules now key on a resolved install root instead of the word "Skyrim"
+    appearing anywhere in a path. That trades one failure mode for another: if the root
+    cannot be derived, the rules match nothing and every deletion sails through -- the
+    inert-hook state again, by a fourth door.
+
+    The branch is otherwise unreachable from the suite (INSTALL_ROOT is `cd ... && pwd`,
+    which always yields an absolute path), so it is exercised the way the jq-unusable
+    case is: on a DOCTORED COPY with the resolution knocked out. Written because the
+    mutation gate reported the fail-closed branch could be deleted with nothing going
+    red -- i.e. it was shipped, load-bearing, and untested.
+    """
+    jq = shutil.which("jq")
+    if not jq:
+        pytest.skip("jq not installed")
+    root = tmp_path / "install"
+    (root / ".claude" / "hooks").mkdir(parents=True)
+    text = (HOOKS / "protect-bash.sh").read_text(encoding="utf-8")
+    text = text.replace("{{JQ_PATH}}", jq.replace(BS, "/"))
+    marker = 'INSTALL_ROOT="$(cd '
+    assert text.count(marker) == 1, "the INSTALL_ROOT line moved; this test is stale"
+    line = next(l for l in text.splitlines() if l.startswith(marker))
+    text = text.replace(line, 'INSTALL_ROOT=""')
+    hook = root / ".claude" / "hooks" / "protect-bash.sh"
+    hook.write_text(text, encoding="utf-8", newline="\n")
+
+    env = dict(os.environ, CLAUDE_PROJECT_DIR=str(root))
+    r = subprocess.run([_bash(), str(hook)],
+                       input=json.dumps(cmd(f'rm -rf "{GAME}"')),
+                       capture_output=True, text=True, env=env, timeout=60)
+    assert r.stdout.strip(), "the hook emitted NOTHING, which the runtime reads as allow"
+    h = json.loads(r.stdout)["hookSpecificOutput"]
+    assert h["permissionDecision"] == "deny", "an unlocatable install must not allow"
+    assert "GUARD INERT" in h["permissionDecisionReason"]
 
 
 @pytest.mark.parametrize("name", ["protect-bash.sh", "protect-files.sh"])

@@ -1,5 +1,59 @@
 # Changelog
 
+## Unreleased
+
+### 🔒 Security / safety — read this one
+
+- **A safety hook that runs out of time is IGNORED, and every hook here was
+  configured 5 seconds.** MEASURED: a `PreToolUse` hook whose refusal arrives after
+  its `timeout` has that refusal **discarded** — the command runs. Verified in both
+  bypass and default permission modes, with controls passing in both (a hook denying
+  in time blocks; one allowing in time runs). This is undocumented behaviour.
+
+  It matters because `protect-bash.sh` measured **4,620 ms under machine load against
+  a 5,000 ms budget** — 92% consumed. A busy machine (a build, a mod deploy, the game
+  running) could silently disarm the delete guard. **All four hooks now use a 30s
+  timeout**, re-verified: the same over-long hook now blocks correctly.
+
+  ⚠ `tools/hook-canary.sh` cannot detect this class. The hook is alive and *does*
+  receive its payload — it simply answers too late. Every liveness check added after
+  the inert-hook incident is blind to it.
+
+### Fixed
+
+- **The delete guard treated any path containing the word "Skyrim" as your game
+  install.** It refused work in a temp folder, in a checkout of this toolkit, in
+  `C:/Temp/skyrim-notes.txt`, and even a `git clone` of a repository whose *name*
+  contains "Skyrim VR". MEASURED by replaying **7,641 real commands**: 443 were
+  refused, and **71 of those were this false positive — none of the 71 named the
+  install**. The guard now resolves the real install root, from the hooks' own
+  location plus paths recorded by `setup.sh`.
+
+  ⚠ Worth stating because it changes what a fix would have to be: **a shell parser
+  would not have fixed this.** It would bind the verb to its target correctly and
+  still refuse, because the *target* matched. The defect was path recognition, not
+  scoping.
+
+- **Redirects and tool output into the game directory were never advised at all** on
+  any install whose path contains a space — which includes the default Steam layout.
+  The rules used `[^"' ]*`, which cannot span the space in `C:/GOG Games/…`. Fixed by
+  the same resolution work; this one was under-blocking, not over-blocking.
+- The Champollion refusal is now scoped to the live install, so the remedy its own
+  message prescribes — copy the `.pex` to a temp directory and run it there — is no
+  longer itself refused.
+- Six rules decided "is this the install" independently; they now share one answer, so
+  a seventh inherits it instead of hand-rolling a seventh regex.
+
+### Added
+
+- `setup.sh` records the resolved game, config and load-order paths to
+  `.claude/skyrim-paths.env` (machine-local, never tracked, never shipped). The hooks
+  read it *in addition to* the root they derive themselves, so a missing or unreadable
+  file can never leave the guard with nothing to match.
+- If no install root can be resolved, the delete guard **refuses** rather than
+  allowing, with a `GUARD INERT` reason — and there is now a test and a mutation
+  proving that branch bites. It was previously shipped, load-bearing and untested.
+
 ## v3.8.3 — 2026-09-06
 
 ### 🔒 Security / safety — read this one

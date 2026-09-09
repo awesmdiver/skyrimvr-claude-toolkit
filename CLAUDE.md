@@ -504,8 +504,26 @@ rules are graded, and only the first list actually refuses.
 ### DENIED -- refused outright, cannot proceed
 - Deleting the game installation directory or the config directory -- anchored on any
   destroyer (`rm`, `rmdir`, `del`, `Remove-Item`, `shutil.rmtree`, `find -delete`)
-  named alongside a qualified path inside the install, in either slash direction.
-  It is pattern matching, not a sandbox; treat it as a guard against accidents.
+  named alongside a path inside the **resolved** install, in either slash direction and
+  either path dialect. It is pattern matching, not a sandbox; treat it as a guard
+  against accidents.
+
+  **"The install" is RESOLVED, not guessed from the word "Skyrim".** The hooks derive
+  their root from their own location -- two directories above `.claude/hooks/` -- and add whatever
+  `setup.sh` recorded in `.claude/skyrim-paths.env`. The previous rule matched *any*
+  path containing "Skyrim", which meant the session scratchpad (its path contains
+  `C--GOG-Games-...-Skyrim-VR`), a checkout of this toolkit, `C:/Temp/skyrim-notes.txt`
+  and a GitHub URL were all refused as "deleting the game". MEASURED: 71 of 443
+  refusals over 7,641 real commands were that false positive, and none of the 71 named
+  the install.
+
+  ⚠ **If no root can be resolved, the guard DENIES.** A guard that evaluated nothing
+  must not answer "fine" -- that conflation is what left every hook here inert for five
+  weeks. So a broken `skyrim-paths.env` costs you refusals, never silent permission.
+
+  ⚠ **A relative path cannot be resolved** -- the hook is never told the caller's
+  working directory -- so `rm Data/x.nif` gets an advisory, not a refusal. Prefer
+  absolute paths when deleting.
 - Deleting Bethesda registry keys
 - Directly writing to ESP/ESM/ESL/BSA/BA2 files (use xelib, Spriggit or AutoMod)
 - Tool output aimed straight at an existing `.psc`, and Champollion against a `.pex`

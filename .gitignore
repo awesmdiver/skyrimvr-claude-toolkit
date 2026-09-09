@@ -21,3 +21,8 @@ tools/.nexus_api_key
 .venv/
 __pycache__/
 .pytest_cache/
+
+# Machine-local paths recorded by setup.sh for the safety hooks. Never tracked:
+# it names one user's directories, and shipping it would point another
+# install's guard at a folder that does not exist there.
+.claude/skyrim-paths.env

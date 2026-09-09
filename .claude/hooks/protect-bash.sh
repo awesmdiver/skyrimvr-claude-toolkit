@@ -32,7 +32,7 @@ HB_DIR="$BACKUP_DIR/.hook-heartbeat"
 mkdir -p "$HB_DIR" 2>/dev/null
 
 # jq is how this hook SPEAKS. If it is missing, unset, or still the literal
-# {{JQ_PATH}} placeholder (the user extracted the zip and never ran setup.sh), then
+# unsubstituted JQ placeholder (the user extracted the zip and never ran setup.sh), then
 # deny() and the inert-guard below both emit nothing -- and nothing is read as
 # ALLOW. So the one refusal that must not depend on jq is printed with printf.
 if ! "$JQ" --version >/dev/null 2>&1; then
@@ -65,6 +65,121 @@ advise() { hooklog ADVISE "$1"; ADVICE="${ADVICE:+$ADVICE | }$1"; }
 # Every path pattern below accepts BOTH separators via [/\\]; see the note on the deny
 # rules for why.
 
+# --- WHERE IS THE INSTALL, ACTUALLY? ----------------------------------------
+#
+# The old rule asked "does this command mention a path containing the word Skyrim".
+# MEASURED 2026-09-08, every one of these matched and none is the live install:
+#
+#   C:/Users/Moona/Projects/skyrimvr-claude-toolkit   our own repo checkout
+#   .../Temp/claude/C--GOG-Games-...-Skyrim-VR/...    the session scratchpad
+#   C:/Temp/skyrim-notes.txt                          a note that happens to be named
+#   .../Downloads/skyrimvr-claude-toolkit-3.8.3.zip   a downloaded zip
+#
+# So a scratchpad cleanup was refused as "deleting the Skyrim install" -- not because
+# a game path appeared elsewhere in the command, but because the scratchpad IS a game
+# path to that regex. Note what this means: a shell PARSER would not have fixed it. It
+# would bind the verb to its target correctly and still deny, because the target still
+# matches. The defect was path RECOGNITION, not scoping.
+#
+# Derived from THIS FILE's location, deliberately NOT from $CLAUDE_PROJECT_DIR: the
+# hooks live at <install>/.claude/hooks/, so ../.. is the install root whichever folder
+# the session is rooted in. CLAUDE_PROJECT_DIR would narrow the guard to a subfolder if
+# someone opened Claude Code inside Data/Scripts, and a guard that silently protects
+# less than it claims is the defect this replaces.
+INSTALL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)"
+
+# Turn an absolute path into an ERE matching it in EITHER dialect with EITHER
+# separator. PROJECT_DIR is MSYS (/c/...) under Git Bash while every path this project
+# documents is Windows (C:/...), so a plain compare reads two spellings of one
+# directory as two directories. Metacharacters in the path are escaped: a real install
+# at "C:/Games/Skyrim (VR)" must match literally, not as a regex group.
+path_to_ere() {
+    local p="${1//\\//}"
+    local drive="" tail="" out c i
+    case "$p" in
+        [a-zA-Z]:/*)  drive="${p:0:1}"; tail="${p:3}" ;;   # C:/... (Windows)
+        /[a-zA-Z]/*)  drive="${p:1:1}"; tail="${p:3}" ;;   # /c/... (MSYS)
+        /?*)          tail="${p:1}" ;;                     # /home/... (plain POSIX)
+        *) return 1 ;;                                     # relative: not a root
+    esac
+    [ -n "$tail" ] || return 1
+    out=""
+    for (( i=0; i<${#tail}; i++ )); do
+        c="${tail:i:1}"
+        case "$c" in
+            /)   out="$out[/\\\\]" ;;
+            '['|']'|'*'|'+'|'?'|'^'|'$'|'('|')'|'{'|'}'|'|'|'.'|'\') out="$out\\$c" ;;
+            *)   out="$out$c" ;;
+        esac
+    done
+    if [ -n "$drive" ]; then
+        ERE_OUT="($drive:|[/\\\\]$drive)[/\\\\]$out"
+    else
+        ERE_OUT="[/\\\\]$out"
+    fi
+    return 0
+}
+
+# Paths the user configured, written by setup.sh. ADDITIVE ONLY -- INSTALL_ROOT above
+# always resolves, so a missing or unreadable paths file cannot make this guard inert.
+# That is the whole reason the root is derived first and the file read second: it is
+# not another unsubstituted-placeholder dependency that fails silently open. (Written
+# WITHOUT naming that placeholder literally: setup.sh substitutes it with a global sed,
+# so a second occurrence in a COMMENT would be rewritten too, destroying the
+# one-per-hook property that makes an UNCONFIGURED hook detectable at all.)
+PATHS_ENV="$INSTALL_ROOT/.claude/skyrim-paths.env"
+# shellcheck source=/dev/null
+[ -f "$PATHS_ENV" ] && . "$PATHS_ENV" 2>/dev/null
+
+add_root() {   # add_root VAR_VALUE -> append its ERE to $1 if new
+    local val="$2" e
+    [ -n "$val" ] || return 0
+    path_to_ere "$val" || return 0
+    e="$ERE_OUT"
+    case "|${!1}|" in *"|$e|"*) return 0 ;; esac
+    printf -v "$1" '%s' "${!1:+${!1}|}$e"
+}
+
+GAME_PATH=""
+add_root GAME_PATH "$INSTALL_ROOT"
+add_root GAME_PATH "${SKYRIM_GAME_ROOT:-}"
+
+# The config directory lives OUTSIDE the install, so it keeps its own rule and its own
+# refusal text -- the INIs there are not recoverable from a mod manager, and a reason
+# that named the wrong directory would be worse than none.
+CONFIG_PATH='Documents[/\\]My Games[/\\]Skyrim'
+add_root CONFIG_PATH "${SKYRIM_CONFIG_DIR:-}"
+
+# Advisory-only widening. The deny rules use the RESOLVED roots and nothing else.
+# These add a relative `Data/` -- `rm Data/Textures/x.dds`, run from the game folder --
+# which no resolved root can match, because a hook is never told the caller's cwd. The
+# old substring rule caught these as a side effect of being too broad; losing them
+# outright would have been a real reduction in cover, so they are kept HERE, where the
+# consequence is a note to Claude rather than a refusal.
+ADVISE_PATH="$GAME_PATH|$CONFIG_PATH"
+
+# A RELATIVE `Data/` gets its own rule rather than an alternative inside ADVISE_PATH,
+# and the reason is a real bug caught by the suite: the rules above consume the space
+# after the verb, so a boundary group inside ADVISE_PATH had nothing left to match
+# against in `rm Data/Textures/x.dds` -- it silently stopped advising, while
+# `rm ./Data/x.dds` still worked because the `/` survived as a boundary. Two rules that
+# LOOK equivalent and differ only in what an earlier group already ate.
+#
+# This spelling carries its own boundary and tolerates flag tokens between the verb and
+# the path. MEASURED on 10 inputs: `rm Data/x`, `rm ./Data/x`, `rm ../Data/x`,
+# `rm -rf Data/x` and `rm -r -f Data/x` advise; `rm mydata/cache.bin`, `ls Data/`,
+# `rm -rf node_modules`, a pytest run and `git status` do not.
+RELATIVE_DATA_DELETE='(^|[;&|(`]|[[:space:]])(rm|rmdir|del|erase)([[:space:]]+-[^[:space:]]*)*[[:space:]]+([^[:space:]]*[/\\])?Data[/\\]'
+
+# FAIL CLOSED. If no root could be derived, this guard evaluates nothing, and a guard
+# that evaluated nothing must not answer "fine" -- that conflation is what left every
+# hook in this toolkit inert for five weeks.
+if [ -z "$GAME_PATH" ]; then
+    hooklog REFUSE "could not derive the install root -- the delete guard evaluated NOTHING"
+    "$JQ" -n '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:"GUARD INERT: protect-bash.sh could not work out which directory is the Skyrim install, so its delete rules checked NOTHING. Allowing silently would be indistinguishable from having no guard at all. Re-run setup.sh from your Skyrim folder."}}'
+    exit 0
+fi
+
 # === HARD BLOCK ===
 #
 # ANCHOR ON THE PATH AND THE INTENT, NOT ON ONE SPELLING OF `rm`.
@@ -95,8 +210,6 @@ advise() { hooklog ADVISE "$1"; ADVICE="${ADVICE:+$ADVICE | }$1"; }
 # deleted -- and a claim like that has to be true or it should not be made. See
 # tests/test_hooks.py, which pins both the catches and the accepted false positive.
 DESTROYER='(^|[;&|(`]|[[:space:]])(rm|rmdir|del|erase)[[:space:]]|Remove-Item|shutil\.rmtree|rmtree[[:space:]]*\(|[[:space:]]-delete([[:space:]]|$)|Remove-ItemProperty'
-GAME_PATH='([A-Za-z]:|[/\\][a-z])[/\\][^"'"'"']*Skyrim'
-CONFIG_PATH='Documents[/\\]My Games[/\\]Skyrim'
 
 if echo "$COMMAND" | grep -qiE "$DESTROYER"; then
     echo "$COMMAND" | grep -qiE "$CONFIG_PATH" && deny "BLOCKED: this command would delete inside the Skyrim config directory (Documents/My Games/Skyrim). Your INIs and controlmap live there and are not recoverable from a mod manager."
@@ -117,7 +230,7 @@ echo "$COMMAND" | grep -qiE -- '-(o|-output|-OutputPath)\s+["'"'"']?[^"'"'"' ]*\
 # decompile can leave the output .psc empty. This has destroyed reconstructed
 # sources twice. Copy the .pex to a temp directory and run it there.
 if echo "$COMMAND" | grep -qiE 'Champollion\b'; then
-    echo "$COMMAND" | grep -qiE '[/\\]Data[/\\]Scripts[/\\][^"'"'"' /\\]+\.pex' \
+    echo "$COMMAND" | grep -qiE "($GAME_PATH)[/\\\\]Data[/\\\\]Scripts[/\\\\][^\"' /\\\\]+[.]pex" \
         && deny "BLOCKED: Champollion against a PEX in Data/Scripts/ has destroyed a .psc twice. Copy the .pex to a temp directory first, then run Champollion there."
 fi
 
@@ -128,10 +241,11 @@ fi
 # and the live install's, kept deliberately: narrowing the deny to root-only
 # deletions is a real design question and a NEW behaviour neither has been
 # exercised with.
-echo "$COMMAND" | grep -qiE 'rm\s.*(\bData[/\\]|Skyrim)' && advise "Deleting files inside the live game install: $COMMAND. Deleting the game ROOT is denied outright; this is a delete further in, which a mod manager can usually redeploy but your own mod files cannot be. Check the path is what you meant."
-echo "$COMMAND" | grep -qiE '(mv|cp|move|copy)\s.*(\bData[/\\]|Skyrim|My Games[/\\]Skyrim)' && advise "Moving/copying inside the live game install: $COMMAND. A stray overwrite here is silent -- confirm the destination before relying on it."
-echo "$COMMAND" | grep -qiE '>\s*["'"'"']?[^"'"'"'[:space:]]*(Skyrim|[/\\]Data[/\\])' && advise "Redirecting output into the game/config directory: $COMMAND. A redirect TRUNCATES its target before anything is written."
-echo "$COMMAND" | grep -qiE 'sed\s+-i.*(\bData[/\\]|Skyrim|My Games[/\\]Skyrim)' && advise "In-place sed edit in the game directory: $COMMAND. A Windows path in sed's REPLACEMENT is destroyed by escape handling -- normalise the path first."
+echo "$COMMAND" | grep -qiE "(^|[;&|(\`]|[[:space:]])(rm|rmdir|del|erase)[[:space:]].*($ADVISE_PATH)" && advise "Deleting files inside the live game install: $COMMAND. Deleting the game ROOT is denied outright; this is a delete further in, which a mod manager can usually redeploy but your own mod files cannot be. Check the path is what you meant."
+echo "$COMMAND" | grep -qiE "$RELATIVE_DATA_DELETE" && advise "Deleting inside Data/ by a RELATIVE path: $COMMAND. The hook is never told the caller's working directory, so it cannot tell whether this resolves into the live install -- check the path is what you meant."
+echo "$COMMAND" | grep -qiE "(^|[;&|(\`]|[[:space:]])(mv|cp|move|copy)[[:space:]].*($ADVISE_PATH)" && advise "Moving/copying inside the live game install: $COMMAND. A stray overwrite here is silent -- confirm the destination before relying on it."
+echo "$COMMAND" | grep -qiE ">[[:space:]]*[\"']?($GAME_PATH|$CONFIG_PATH)" && advise "Redirecting output into the game/config directory: $COMMAND. A redirect TRUNCATES its target before anything is written."
+echo "$COMMAND" | grep -qiE "sed[[:space:]]+-i.*($GAME_PATH|$CONFIG_PATH)" && advise "In-place sed edit in the game directory: $COMMAND. A Windows path in sed's REPLACEMENT is destroyed by escape handling -- normalise the path first."
 
 # === ADVISE -- plugin/archive/load order references ===
 echo "$COMMAND" | grep -qiE '\.(esp|esm|esl|bsa|ba2)\b' && advise "Command references plugin/archive files: $COMMAND. Reading one is fine; writing one directly corrupts it -- use xelib, Spriggit or AutoMod."
@@ -154,7 +268,7 @@ fi
 
 # === ADVISE -- any external Papyrus/ESP tool writing into the game dirs ===
 if echo "$COMMAND" | grep -qiE '\b(automod|SpookysAutomod|spookys-automod|automod-cli|PapyrusAssembler|PapyrusCompiler|Champollion|Caprica|spriggit)\b'; then
-    echo "$COMMAND" | grep -qiE -- '-(o|-output|-OutputPath|-p|-psc|-asm|-a)\s+["'"'"']?[^"'"'"' ]*([/\\]Data[/\\]|Skyrim)' \
+    echo "$COMMAND" | grep -qiE -- "-(o|-output|-OutputPath|-p|-psc|-asm|-a)[[:space:]]+[\"']?($GAME_PATH|$CONFIG_PATH)" \
         && advise "External Papyrus/ESP tool writing into the game/data directory: $COMMAND. Verify the output landed where you intended -- several of these have destructive defaults."
 fi
 

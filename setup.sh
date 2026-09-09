@@ -307,6 +307,39 @@ for hook in protect-bash.sh protect-files.sh backup-before-edit.sh snapshot-befo
     fi
 done
 
+# --- Record the resolved paths where the hooks can read them ---
+#
+# protect-bash.sh decides "is this path inside the install" by resolving a real root,
+# not by looking for the word Skyrim in the command. It derives one root on its own --
+# the hooks live at <install>/.claude/hooks/, so ../.. is the install -- and reads this
+# file for anything else. That ordering is deliberate: the self-derived root ALWAYS
+# resolves, so a missing or unreadable file here can never leave the guard with nothing
+# to match and, via its fail-closed branch, refusing everything.
+#
+# Written with printf per line rather than a heredoc: a quoted heredoc still eats a
+# backslash level through some tool boundaries, and these are Windows paths.
+echo ""
+echo "Recording resolved paths for the safety hooks..."
+{
+    printf '# Written by setup.sh. Machine-local: not tracked, not shipped.\n'
+    printf '# protect-bash.sh reads these to tell YOUR install from a path that merely\n'
+    printf '# contains the word "Skyrim" -- a scratchpad, a checkout, a downloaded zip.\n'
+    printf 'SKYRIM_GAME_ROOT="%s"\n' "$GAME_ROOT_WIN"
+    printf 'SKYRIM_CONFIG_DIR="%s"\n' "$CONFIG_DIR"
+    printf 'SKYRIM_LOADORDER_DIR="%s"\n' "$LOADORDER_DIR"
+} > "$GAME_DIR/.claude/skyrim-paths.env"
+
+# It must SOURCE, or the hooks silently fall back to the self-derived root alone. A
+# config bash cannot read is the failure this check exists to catch, and it costs
+# nothing to run here where the user can still see the message.
+if ( set -a; . "$GAME_DIR/.claude/skyrim-paths.env" ) 2>/dev/null; then
+    echo "  Wrote: .claude/skyrim-paths.env"
+else
+    echo "  WARNING: .claude/skyrim-paths.env does not parse as shell."
+    echo "           The hooks will still guard this folder, but not the config"
+    echo "           directory. Check for unusual characters in your paths."
+fi
+
 # --- Configure CLAUDE.md (replace path placeholders) ---
 echo ""
 echo "Configuring CLAUDE.md..."

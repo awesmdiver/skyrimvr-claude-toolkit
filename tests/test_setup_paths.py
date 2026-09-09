@@ -165,3 +165,39 @@ def test_sibling_instance_for_a_different_game_is_ignored(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     line = key_path(game, "Mod manager")
     assert "stock layout" in line, f"adopted a decoy instance: {line!r}"
+
+
+# ---------------------------------------------------- the hook paths file
+
+def test_setup_writes_a_usable_paths_file_for_the_hooks(game_dir):
+    """`protect-bash.sh` guards a RESOLVED install root, not any path containing
+    the word Skyrim -- which used to match the session scratchpad, this repo's own
+    checkout and a downloaded zip. It derives one root from its own location and
+    reads the rest from `.claude/skyrim-paths.env`.
+
+    Asserting the FILE, not the log line: setup.sh printing "Wrote" proves nothing,
+    and this suite exists because a CI job once ran setup.sh and then only checked
+    that settings.json parsed.
+    """
+    import subprocess
+    from conftest import BASH
+
+    r = run_setup(game_dir)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    env = game_dir / ".claude" / "skyrim-paths.env"
+    assert env.exists(), "setup.sh did not record the resolved paths for the hooks"
+    body = env.read_text(encoding="utf-8")
+
+    # It must SOURCE. A config bash cannot read leaves the hooks with only their
+    # self-derived root -- the config directory would silently stop being guarded.
+    sourced = subprocess.run([BASH, "-c", f'set -a; . "{env.as_posix()}"'],
+                             capture_output=True, text=True, timeout=60)
+    assert sourced.returncode == 0, f"paths file does not source: {sourced.stderr[:300]}"
+
+    # And it must name THIS install, not a placeholder left unsubstituted.
+    root = game_root_win(game_dir)
+    assert f'SKYRIM_GAME_ROOT="{root}"' in body, f"wrong or missing game root in:\n{body}"
+    for key in ("SKYRIM_CONFIG_DIR", "SKYRIM_LOADORDER_DIR"):
+        assert key in body, f"{key} missing from the paths file"
+    assert "{{" not in body, f"an unsubstituted placeholder reached the paths file:\n{body}"

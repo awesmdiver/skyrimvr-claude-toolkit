@@ -35,6 +35,38 @@ MUTATION_IGNORE = shutil.ignore_patterns(
 
 # (id, relative file, text to find, replacement, test that must then fail)
 MUTATIONS = [
+    # Put the SUBSTRING path test back. It asked "does this command mention a path
+    # containing the word Skyrim", which matched the session scratchpad, this repo's
+    # own checkout, C:/Temp/skyrim-notes.txt and a git URL -- refusing ordinary work
+    # as "deleting the game". The named row below must go red, or nothing stops that
+    # rule quietly returning.
+    pytest.param(
+        ".claude/hooks/protect-bash.sh",
+        'add_root GAME_PATH "$INSTALL_ROOT"',
+        "GAME_PATH='([A-Za-z]:|[/" + BS + BS + "][a-z])[/" + BS + BS + "][^\"']*Skyrim'",
+        "tests/test_hooks.py::test_the_delete_rule_does_not_swallow_ordinary_work",
+        id="install-root-resolved-not-substring-matched",
+    ),
+    # And the other direction: a guard that cannot work out which directory the install
+    # is must REFUSE, not shrug. Deleting the fail-closed branch has to break the rows
+    # that prove the install still cannot be deleted.
+    pytest.param(
+        ".claude/hooks/protect-bash.sh",
+        'if [ -z "$GAME_PATH" ]; then',
+        'if false; then',
+        "tests/test_hooks.py::test_the_delete_guard_refuses_when_it_cannot_locate_the_install",
+        id="delete-guard-fails-closed-when-no-root-resolves",
+    ),
+    # Stop recording the resolved paths. The hooks keep their self-derived root, so
+    # the install itself is still guarded and nothing looks broken -- but the CONFIG
+    # directory silently stops being guarded, which is the quiet half of the change.
+    pytest.param(
+        "setup.sh",
+        '} > "$GAME_DIR/.claude/skyrim-paths.env"',
+        "} > /dev/null",
+        "tests/test_setup_paths.py::test_setup_writes_a_usable_paths_file_for_the_hooks",
+        id="setup-records-paths-for-the-hooks",
+    ),
     pytest.param(
         "setup.sh",
         "JQ_PATH=$(printf '%s' " + '"$JQ_PATH"' + " | tr '" + BS + "134' '/')",
@@ -456,6 +488,16 @@ MUTATIONS = [
         'HB_DIR="$BACKUP_DIR/.disabled"',
         "tests/test_repo_invariants.py::test_every_hook_writes_a_heartbeat_and_handles_an_empty_payload",
         id="hook-heartbeat-removed",
+    ),
+
+    pytest.param(
+        # A second {{JQ_PATH}} in a hook. setup.sh rewrites every occurrence, so the
+        # one-per-hook property that makes an UNconfigured hook detectable is lost.
+        ".claude/hooks/protect-bash.sh",
+        "# unsubstituted JQ placeholder",
+        "# {{JQ_PATH}} placeholder",
+        "tests/test_repo_invariants.py::test_every_hook_is_configured_by_setup_and_carries_one_placeholder",
+        id="hook-carries-a-second-jq-placeholder",
     ),
 
     pytest.param(
