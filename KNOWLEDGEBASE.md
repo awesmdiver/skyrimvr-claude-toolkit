@@ -1843,3 +1843,32 @@ starting at all (see [claude-code#77078](https://github.com/anthropics/claude-co
 hook processes left suspended, `UserProcessorTime = 00:00:00`, OPEN with no known root cause), or
 `durationMs` is measured differently for a cancellation than for a success. **That question is
 unresolved** — do not treat the fork count as the explanation.
+
+## KNOWN, NOT FIXED: verify-release.sh's hook floor is never actually derived
+
+Found by the v3.9.1 release review, 2026-09-09. **Deferred deliberately — fix this before
+`verify-release.sh` certifies another release.**
+
+`tools/verify-release.sh:73-74` reads the floor from
+`"$ROOT/../.github/workflows/release.yml"`. But `ROOT="$WORK/skyrimvr-claude-toolkit-$VER"`
+where `WORK=$(mktemp -d)` holds only the zip and the extracted tree — and **`.github` is
+excluded from the release payload**, so that path never exists. `sed` fails, `floor` comes back
+empty, and `case "$floor" in ''|*[!0-9]*) floor=5 ;;` substitutes the hardcoded 5.
+
+So the check passes for the wrong reason. Two claims in the file are false as written:
+
+- the inline comment: *"The FLOOR is derived from the workflow that built this zip, not retyped
+  here"* — it is retyped, in the fallback.
+- the header: *"the hook floor and the gate list are read from the working tree"* —
+  `$ROOT/../` is the temp directory, not the working tree.
+
+⚠ **It is invisible because the fallback is currently CORRECT.** `release.yml` asserts `-ge 5`
+and the fallback says 5, so the assertion agrees with reality today and will keep agreeing until
+someone adds a sixth hook — at which point the tool reports a stale floor with a comment
+insisting it cannot be stale. That is the exact defect this line was written to repair: a
+hardcoded `-ge 4` that was one release stale the moment it shipped.
+
+**Fix shape:** derive from the checkout, not from the extracted payload — the working tree is
+where `.github` actually lives, and the header already says that is the intent. Then prove it by
+mutation: change `release.yml`'s floor and require the named check to go red. A derivation that
+cannot be shown to follow its source is a hardcoded value with extra steps.

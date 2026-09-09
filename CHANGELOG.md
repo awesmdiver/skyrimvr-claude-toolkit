@@ -1,6 +1,6 @@
 # Changelog
 
-## v3.9.1
+## v3.9.1 — 2026-09-09
 
 ### 🔒 Security / safety
 
