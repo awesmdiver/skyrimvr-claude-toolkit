@@ -573,8 +573,8 @@ MUTATIONS = [
     # walked past the guard with NO output -- which the runtime reads as allow.
     pytest.param(
         ".claude/hooks/protect-bash.sh",
-        '            /)   out="$out[/' + BS + BS + BS + BS + ']+" ;;',
-        '            /)   out="$out[/' + BS + BS + BS + BS + ']" ;;',
+        '            /)   out="${out}[/' + BS + BS + BS + BS + ']+" ;;',
+        '            /)   out="${out}[/' + BS + BS + BS + BS + ']" ;;',
         "tests/test_hooks.py::test_the_install_cannot_be_deleted_however_it_is_spelled",
         id="separator-class-accepts-doubled-paths",
     ),
