@@ -58,8 +58,12 @@ mkdir -p "$HB_DIR" 2>/dev/null
 # deny() and the inert-guard below both emit nothing -- and nothing is read as
 # ALLOW. So the one refusal that must not depend on jq is printed with printf.
 if ! "$JQ" --version >/dev/null 2>&1; then
+    # Backslashes out, forward slashes in: this string goes into JSON by printf, not
+    # through jq, and a Windows jq path (`where jq` prints one) would otherwise emit
+    # invalid escapes -- unparseable output is not a deny, it is an allow.
+    JQ_SHOWN="${JQ//\\//}"
     printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"GUARD INERT: %s cannot run jq (%s), so it evaluated NO rules and cannot report a decision. Allowing silently would be indistinguishable from approving. Install jq (winget install jqlang.jq) and run setup.sh to configure its path."}}\n' \
-        "$HOOK_NAME" "$JQ"
+        "$HOOK_NAME" "$JQ_SHOWN"
     exit 0
 fi
 if [ -n "$INPUT" ]; then
@@ -94,13 +98,13 @@ advise() { hooklog ADVISE "$1"; ADVICE="${ADVICE:+$ADVICE | }$1"; }
 echo "$FILE_PATH" | grep -qiE '\.(esp|esm|esl|bsa|ba2)[[:space:].]*$' && deny "BLOCKED: Cannot directly write to plugin/archive files. Use xelib, Spriggit or AutoMod."
 
 # === WHITELIST -- our own workspace (silent, no note) ===
-echo "$FILE_PATH" | grep -qiE '(^|[/\\])\.claude[/\\](hooks|plans|backups|memory|projects)[/\\]' && exit 0
-echo "$FILE_PATH" | grep -qiE '[/\\]node_modules[/\\]' && exit 0
+echo "$FILE_PATH" | grep -qiE '(^|[/\\]+)\.claude[/\\]+(hooks|plans|backups|memory|projects)[/\\]+' && exit 0
+echo "$FILE_PATH" | grep -qiE '[/\\]+node_modules[/\\]+' && exit 0
 
 # === ADVISE -- legitimate but consequential ===
 echo "$FILE_PATH" | grep -qiE '(Skyrim\.ini|SkyrimVR\.ini|SkyrimPrefs\.ini|SkyrimCustom\.ini)$' \
     && advise "SKYRIM CONFIG: $FILE_PATH. Load order is Skyrim.ini then SkyrimVR.ini then SkyrimPrefs.ini (last wins), so a setting here can be overridden by a later file. Diff before and after rather than trusting the edit."
-echo "$FILE_PATH" | grep -qiE '[/\\]Data[/\\]SKSE[/\\]Plugins[/\\].*\.ini$' \
+echo "$FILE_PATH" | grep -qiE '[/\\]+Data[/\\]+SKSE[/\\]+Plugins[/\\]+.*\.ini$' \
     && advise "SKSE PLUGIN CONFIG: $FILE_PATH. Not captured by any snapshot hook -- copy it yourself before changing it."
 echo "$FILE_PATH" | grep -qiE '(loadorder\.txt|plugins\.txt)$' \
     && advise "LOAD ORDER: $FILE_PATH. Your mod manager owns these and may overwrite a direct edit on its next deploy, so make sure a direct edit is really what is wanted. Note the Special Edition copy under AppData is a DIFFERENT file from the VR one and is routinely stale."
@@ -113,7 +117,7 @@ if [ -z "$ADVICE" ]; then
     # this toolkit (its own directory name contains it), annotating routine edits
     # with a statement that was simply false. Require the shape of a real install --
     # a Data/ directory, or the config path under My Games.
-    echo "$FILE_PATH" | grep -qiE "(^|[/\\\\])Data[/\\\\]|My Games[/\\\\]Skyrim" \
+    echo "$FILE_PATH" | grep -qiE "(^|[/\\\\]+)Data[/\\\\]+|My Games[/\\\\]+Skyrim" \
         && advise "Editing inside the live game/config install: $FILE_PATH"
 fi
 

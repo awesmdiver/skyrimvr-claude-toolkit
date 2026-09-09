@@ -169,6 +169,39 @@ def test_sibling_instance_for_a_different_game_is_ignored(tmp_path):
 
 # ---------------------------------------------------- the hook paths file
 
+def test_the_paths_file_survives_a_dollar_sign_in_the_install_path(tmp_path):
+    """`$` and backtick are legal NTFS filename characters, and protect-bash.sh
+    SOURCES this file on every Bash tool call. Written double-quoted, MEASURED: a real
+    folder `C:/Games/My$Stuff/Skyrim VR` reached the guard as `C:/Games/My/Skyrim VR`
+    -- matching nothing, so the install was silently UNGUARDED -- and a backtick in the
+    path EXECUTED on every call. setup.sh's own validation could not catch either,
+    because sourcing cleanly proves the file PARSES, not that it still says what was
+    written.
+    """
+    from conftest import make_game
+    game = make_game(tmp_path, name="My$Game")
+    r = run_setup(game)
+    assert r.returncode == 0, r.stdout + r.stderr
+    env = (game / ".claude" / "skyrim-paths.env").read_text(encoding="utf-8")
+    root_line = next(l for l in env.splitlines() if l.startswith("SKYRIM_GAME_ROOT="))
+    assert "My$Game" in root_line, (
+        f"the dollar sign was lost on the way to disk: {root_line!r}")
+
+    # ...and it must still be there after the hook SOURCES it, which is the step that
+    # actually mangled it.
+    import subprocess as _sp
+    from conftest import BASH as _BASH
+    # SINGLE quotes around the path being sourced: this test's own install directory
+    # contains a `$`, so a double-quoted path would have `$Game` expanded away by the
+    # test's shell before `.` ever ran -- the test reproducing, on itself, the exact
+    # defect it exists to catch.
+    env_path = (game / ".claude" / "skyrim-paths.env").as_posix()
+    got = _sp.run(
+        [_BASH, "-c", ". '" + env_path + "'; printf '%s' \"$SKYRIM_GAME_ROOT\""],
+        capture_output=True, text=True, timeout=60).stdout
+    assert "My$Game" in got, f"sourcing mangled the path: {got!r}"
+
+
 def test_setup_writes_a_usable_paths_file_for_the_hooks(game_dir):
     """`protect-bash.sh` guards a RESOLVED install root, not any path containing
     the word Skyrim -- which used to match the session scratchpad, this repo's own
@@ -197,7 +230,9 @@ def test_setup_writes_a_usable_paths_file_for_the_hooks(game_dir):
 
     # And it must name THIS install, not a placeholder left unsubstituted.
     root = game_root_win(game_dir)
-    assert f'SKYRIM_GAME_ROOT="{root}"' in body, f"wrong or missing game root in:\n{body}"
+    # Single-quoted since v3.9: the file is SOURCED, and `$`/backtick are legal in a
+    # Windows folder name. Assert the VALUE reaches the file, not one spelling of it.
+    assert f"SKYRIM_GAME_ROOT='{root}'" in body, f"wrong or missing game root in:\n{body}"
     for key in ("SKYRIM_CONFIG_DIR", "SKYRIM_LOADORDER_DIR"):
         assert key in body, f"{key} missing from the paths file"
     assert "{{" not in body, f"an unsubstituted placeholder reached the paths file:\n{body}"

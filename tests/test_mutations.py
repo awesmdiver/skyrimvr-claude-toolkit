@@ -545,7 +545,7 @@ MUTATIONS = [
         # Put the bare `Skyrim` back in the catch-all. Every edit to a checkout of
         # this toolkit is then annotated as an edit inside a live game install.
         ".claude/hooks/protect-files.sh",
-        'grep -qiE "(^|[/' + BS * 4 + '])Data[/' + BS * 4 + ']|My Games[/' + BS * 4 + ']Skyrim"',
+        'grep -qiE "(^|[/' + BS * 4 + ']+)Data[/' + BS * 4 + ']+|My Games[/' + BS * 4 + ']+Skyrim"',
         'grep -qiE "([/' + BS * 4 + ']Data[/' + BS * 4 + ']|Skyrim|My Games[/' + BS * 4 + ']Skyrim)"',
         "tests/test_hooks.py::test_editing_this_toolkits_own_checkout_is_not_editing_a_game_install",
         id="catch-all-matches-a-bare-skyrim",
@@ -567,13 +567,89 @@ MUTATIONS = [
         id="game-dir-warning-silenced",
     ),
 
+    # --- what the v3.9 release review found ---------------------------------
+    # Put back the single-character separator class. Doubled separators name the same
+    # directory and are the canonical Python/PowerShell spelling, and every one of them
+    # walked past the guard with NO output -- which the runtime reads as allow.
+    pytest.param(
+        ".claude/hooks/protect-bash.sh",
+        '            /)   out="$out[/' + BS + BS + BS + BS + ']+" ;;',
+        '            /)   out="$out[/' + BS + BS + BS + BS + ']" ;;',
+        "tests/test_hooks.py::test_the_install_cannot_be_deleted_however_it_is_spelled",
+        id="separator-class-accepts-doubled-paths",
+    ),
+    # Stop escaping regex metacharacters in the resolved root. `C:/Program Files (x86)/`
+    # is the commonest real Steam layout there is, and `(x86)` unescaped is a valid ERE
+    # group that simply never matches the actual directory -- inert, with GAME_PATH
+    # still non-empty so the fail-closed branch does not save it.
+    pytest.param(
+        ".claude/hooks/protect-bash.sh",
+        """            '['|']'|'*'|'+'|'?'|'^'|'$'|'('|')'|'{'|'}'|'|'|'.'|'""" + BS + """') out="$out""" + BS + BS + """$c" ;;""",
+        '            # escaping removed by the mutation gate',
+        "tests/test_hooks.py::test_an_install_path_containing_regex_metacharacters_is_still_guarded",
+        id="path-to-ere-escapes-regex-metacharacters",
+    ),
+    # Stop honouring the CONFIGURED config directory. MO2/Wabbajack put the INIs in the
+    # instance profile, outside Documents/My Games, so for those users this arm is the
+    # only thing guarding their config -- and it had no test at all.
+    pytest.param(
+        ".claude/hooks/protect-bash.sh",
+        'add_root CONFIG_PATH "${SKYRIM_CONFIG_DIR:-}"',
+        ':',
+        "tests/test_hooks.py::test_a_configured_config_directory_outside_documents_is_guarded",
+        id="configured-config-directory-is-guarded",
+    ),
+    # Put the 5s timeouts back. A PreToolUse refusal that arrives late is DISCARDED,
+    # and this release leads with that fix -- guarded, until now, by nothing.
+    pytest.param(
+        ".claude/settings.json",
+        '"command": "bash \\"$CLAUDE_PROJECT_DIR/.claude/hooks/protect-bash.sh\\"",\n            "timeout": 30,',
+        '"command": "bash \\"$CLAUDE_PROJECT_DIR/.claude/hooks/protect-bash.sh\\"",\n            "timeout": 5,',
+        "tests/test_repo_invariants.py::test_every_registered_hook_has_a_timeout_that_is_not_the_old_five_seconds",
+        id="hook-timeouts-are-not-the-old-five-seconds",
+    ),
+    # Write the paths file double-quoted again: a `$` in a legal Windows folder name
+    # then vanishes at source time and the install is silently unguarded.
+    pytest.param(
+        "setup.sh",
+        "    printf 'SKYRIM_GAME_ROOT=%s" + BS + "n' " + '"$(sq "$GAME_ROOT_WIN")"',
+        "    printf 'SKYRIM_GAME_ROOT=" + '"%s"' + BS + "n' " + '"$GAME_ROOT_WIN"',
+        "tests/test_setup_paths.py::test_the_paths_file_survives_a_dollar_sign_in_the_install_path",
+        id="paths-file-is-single-quoted",
+    ),
+    # Gate the GONE alarm on the newest stored copy again, so a file emptied in one
+    # session and deleted in the next reports a clean install.
+    pytest.param(
+        "tools/kb-guard.sh",
+        '        if [ "$LARGEST_SIZE" -gt 0 ]; then',
+        '        if [ -n "$prior" ] && [ "$(bytes "$prior")" -gt 0 ]; then',
+        "tests/test_kb_guard.py::test_a_file_emptied_then_deleted_still_alarms",
+        id="gone-alarm-uses-the-largest-copy",
+    ),
+    # Swallow copy failures again: a run that stored nothing then says "unchanged".
+    pytest.param(
+        "tools/kb-guard.sh",
+        '        failed="$failed $name(copy)"',
+        '        :',
+        "tests/test_kb_guard.py::test_a_copy_that_could_not_be_written_is_never_reported_as_unchanged",
+        id="kb-guard-reports-a-failed-copy",
+    ),
+    # Shrink WATCHED to the one file every other test happens to create.
+    pytest.param(
+        "tools/kb-guard.sh",
+        'WATCHED="KNOWLEDGEBASE.md KNOWLEDGEBASE.local.md CLAUDE.md"',
+        'WATCHED="KNOWLEDGEBASE.md"',
+        "tests/test_kb_guard.py::test_every_watched_file_is_actually_snapshotted",
+        id="every-watched-file-is-snapshotted",
+    ),
+
     # --- the knowledgebase guard --------------------------------------------
     # Put back the collision: the snapshot directory is named to the second, so two
     # runs inside one second shared it and the second `cp` overwrote the first. Found
     # by a probe while building the tool, which is the only reason it is a test.
     pytest.param(
         "tools/kb-guard.sh",
-        'while [ -d "$STORE/$STAMP" ]; do',
+        'while [ -e "$STORE/$STAMP" ]; do',
         "while false; do",
         "tests/test_kb_guard.py::test_two_runs_in_the_same_second_do_not_overwrite_each_other",
         id="kb-guard-snapshot-stamps-are-unique",

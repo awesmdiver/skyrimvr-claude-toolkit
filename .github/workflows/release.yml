@@ -20,6 +20,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          # Without this, a workflow_dispatch run builds the zip from the DEFAULT
+          # BRANCH while naming it after the input tag -- so re-cutting an old
+          # release quietly ships whatever landed since. Latent until now only
+          # because every release so far was push-triggered.
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Resolve tag
         id: tag
@@ -52,6 +57,8 @@ jobs:
           test ! -e "/tmp/$NAME/KNOWLEDGEBASE.local.md" || { echo "::error::KNOWLEDGEBASE.local.md is in the release payload; extracting this release would overwrite the user's own notes"; exit 1; }
           test -f "/tmp/$NAME/KNOWLEDGEBASE.md" || { echo "::error::the toolkit's own KNOWLEDGEBASE.md is missing from the payload"; exit 1; }
           test -d "/tmp/$NAME/.claude/hooks" || { echo "::error::.claude/ missing from payload"; exit 1; }
+          # setup.sh is the first thing every doc surface tells the user to run.
+          test -f "/tmp/$NAME/setup.sh" || { echo "::error::setup.sh missing from the payload"; exit 1; }
 
           # THE SHIPPED HOOKS MUST NOT BE INERT.
           #

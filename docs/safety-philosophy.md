@@ -24,9 +24,9 @@ Claude must explicitly rate its confidence (0-100%) before proposing any change 
 ### Layer 3: Hook Guards
 Five bash scripts intercept Claude's tool calls:
 
-- **protect-bash.sh** -- Blocks destructive commands, confirms file operations
-- **protect-files.sh** -- Blocks binary file writes, confirms all other edits
-- **backup-before-edit.sh** -- Copies every file before modification
+- **protect-bash.sh** -- Blocks destructive commands; **advises** on file operations in the game directory (a note to Claude, not a prompt to you)
+- **protect-files.sh** -- Blocks writes to plugin/archive binaries through the Edit/Write tools; **advises** on all other edits in the install
+- **backup-before-edit.sh** -- Copies a file before Claude modifies it **through the Edit/Write tools**. ⚠ Anything written by a script run through Bash is invisible to it -- that is a property of hooks, not a bug here. MEASURED: zero backups of a 177,459-byte `KNOWLEDGEBASE.md` across seven months, because it is written by a script. `session-kb-guard.sh` below covers that channel.
 - **snapshot-before-tool.sh** -- Snapshots active Papyrus source/compiled scripts before any Bash command
 - **session-kb-guard.sh** -- At SessionStart, copies the files nothing can rebuild
   (`KNOWLEDGEBASE.md`, `KNOWLEDGEBASE.local.md`, `CLAUDE.md`) and raises an alarm if
@@ -44,7 +44,9 @@ Every file modification is logged with timestamp, tool name, and backup location
 ## Design Principles
 
 ### 1. No Silent Modifications
-Every file change triggers a confirmation prompt or is blocked outright. There are no "auto-approved" edits to game files.
+Destructive changes are blocked outright. Everything else that is consequential but legitimate is **advised**: a note is injected into Claude's context and the call proceeds -- you are not prompted. Exactly one rule in the toolkit asks you to decide (a ReSaver command that mutates a save).
+
+⚠ This inverted in v3.8.3 and this page said the opposite until v3.9. A guard that prompts on routine work gets approved by reflex and then protects nothing; the X4 toolkit measured 40 such prompts across 13,282 commands, every one of them noise. So the honest summary is: **few prompts, a short deny list, and a lot of advice** -- not "nothing happens without your approval".
 
 ### 2. Reversibility
 Every edit has a timestamped backup. The `restore-from-backup.sh` script makes recovery straightforward.
@@ -60,7 +62,7 @@ The "safety improvement loop" instruction in CLAUDE.md asks Claude to evaluate w
 
 ## Customizing Safety
 
-The hook scripts are designed to be customized:
+The hook scripts are designed to be customized -- but ⚠ **they are shipped files, so extracting an update replaces them and your edits are lost.** Keep a copy of any hook you change, or put your rules in a separate hook and register it in `.claude/settings.json` (also shipped -- copy it too). To customise:
 
 - **Whitelist paths** you want Claude to edit freely (e.g., a working directory for scripts)
 - **Add new patterns** to the bash guard for commands specific to your workflow

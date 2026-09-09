@@ -17,11 +17,19 @@
 # a release port ran while a mutating gate had a file rewritten in place, and the
 # tracked diff looked right while the bundle carried the mutation. Everything here
 # runs against what a user actually extracts.
+# ⚠ It checks the PUBLISHED ARTIFACT against THIS CHECKOUT'S expectations -- the hook
+# floor and the gate list are read from the working tree, not from the zip (.github is
+# excluded from the payload, so the artifact cannot state its own contract). Run it from
+# the tag you are verifying. Pointed at an older release from a newer checkout, gates
+# added since that release will correctly, and uninterestingly, go red.
 set -uo pipefail
 
-TAG="${1:?usage: coldclone.sh vX.Y.Z}"
+TAG="${1:?usage: bash tools/verify-release.sh vX.Y.Z}"
 VER="${TAG#v}"
 WORK="$(mktemp -d)"
+# Nothing removed these: 56 stale workspaces, ~1.2 MB each, had accumulated on the
+# author's machine because every exit path left one behind.
+trap 'rm -rf "$WORK"' EXIT
 # Point this at a folder of real crash dumps to exercise the triage tools against
 # something other than fixtures. Skipped (not failed) when unset or absent.
 REAL_DUMPS="${SKSE_CRASH_DIR:-}"
@@ -30,6 +38,10 @@ fails=0
 note() { printf '  %-52s %s\n' "$1" "$2"; }
 ok()   { note "$1" "ok"; }
 bad()  { note "$1" "!! $2"; fails=$((fails+1)); }
+# A dependency this machine lacks is SKIPPED OUT LOUD, never silently passed: a check
+# that cannot run has proven nothing, and reporting it as ok is the lie this file exists
+# to avoid telling.
+skip() { note "$1" "skipped ($2)"; }
 
 echo "=============================================================="
 echo "COLD CLONE -- $TAG, from the published artifact"
@@ -53,19 +65,39 @@ ROOT="$WORK/skyrimvr-claude-toolkit-$VER"
 [ -d "$ROOT/.claude/hooks" ] && ok ".claude/hooks present" \
                              || bad ".claude/hooks present" "MISSING"
 [ -d "$ROOT/.git" ] && bad ".git excluded" ".git LEAKED" || ok ".git excluded"
+# The FLOOR is derived from the workflow that built this zip, not retyped here. A
+# hardcoded `-ge 4` was already one release stale at the moment it shipped: the arc
+# that promoted this file into the repo also added a fifth hook and bumped release.yml
+# to `-ge 5`, and nothing said so. Same defect as the E2E harness that asserted the
+# literal string "4 hook(s) proven".
+floor=$(sed -n 's/.*test "\$nhooks" -ge \([0-9][0-9]*\).*/\1/p' \
+        "$ROOT/../.github/workflows/release.yml" 2>/dev/null | head -1)
+case "$floor" in ''|*[!0-9]*) floor=5 ;; esac
 n=$(find "$ROOT/.claude/hooks" -name '*.sh' 2>/dev/null | wc -l)
-[ "$n" -ge 4 ] && ok "hook scripts in payload ($n)" || bad "hook scripts" "only $n"
+[ "$n" -ge "$floor" ] && ok "hook scripts in payload ($n, floor $floor)" \
+                      || bad "hook scripts" "only $n, floor is $floor"
 
 # --- the hooks must not be inert: `cat`, never `cat /dev/stdin` ------------
 # Assert the POSITIVE: every hook must contain the line that works. A blocklist
 # here matched the comments explaining the defect, and also passed for `cat
 # /dev/fd/0`, `cat  /dev/stdin`, and a hook reading stdin not at all.
+# `find`, not a glob. The count above is recursive and this loop was not, so a hook
+# in a subdirectory was COUNTED and never INSPECTED -- the inert-stdin defect this
+# check exists to catch, walking back in through a door the check does not look at.
+# release.yml carries a comment saying exactly this; the lesson did not make the copy.
 miss=0
-for h in "$ROOT/.claude/hooks"/*.sh; do
-  grep -qxF 'INPUT=$(cat)' "$h" || { miss=1; echo "        $(basename $h) does not read stdin with a bare cat"; }
-done
-[ "$miss" -eq 0 ] && ok "every hook reads stdin with a bare cat" || bad "hook stdin reads" "see above"
+while IFS= read -r h; do
+  grep -qxF 'INPUT=$(cat)' "$h" || { miss=1; echo "        $(basename "$h") does not read stdin with a bare cat"; }
+  grep -qE '^[^#]*hook-heartbeat' "$h" || { miss=1; echo "        $(basename "$h") writes no heartbeat outside a comment"; }
+done < <(find "$ROOT/.claude/hooks" -name '*.sh' 2>/dev/null)
+[ "$miss" -eq 0 ] && ok "every hook reads stdin bare AND writes a heartbeat" || bad "hook stdin/heartbeat" "see above"
 [ -f "$ROOT/tools/hook-canary.sh" ] && ok "hook-canary.sh shipped" || bad "hook-canary.sh" "MISSING but referenced in the docs"
+[ -f "$ROOT/tools/kb-guard.sh" ] && ok "kb-guard.sh shipped" || bad "kb-guard.sh" "MISSING; session-kb-guard.sh would print NOT RUN every session"
+[ -f "$ROOT/setup.sh" ] && ok "setup.sh shipped" || bad "setup.sh" "MISSING but every doc tells the user to run it"
+# The user's own knowledgebase must not be IN the bundle, and ours must be.
+[ -e "$ROOT/KNOWLEDGEBASE.local.md" ] && bad "KNOWLEDGEBASE.local.md excluded" "PRESENT -- this zip would overwrite the user's notes" \
+                                      || ok "KNOWLEDGEBASE.local.md excluded"
+[ -f "$ROOT/KNOWLEDGEBASE.md" ] && ok "the toolkit's KNOWLEDGEBASE.md shipped" || bad "KNOWLEDGEBASE.md" "MISSING"
 
 # --- the tools must RUN from the artifact ---------------------------------
 if [ -d "$REAL_DUMPS" ]; then
@@ -106,21 +138,39 @@ else
 fi
 
 # cosave exit contract from the artifact.
+# ⚠ Pair the exit code with the MESSAGE. CPython exits 2 when it cannot open the
+# script file either, so `[ $? -eq 2 ]` alone reported "refuses a non-cosave" for a
+# payload with tools/cosave-info.py DELETED -- green-lighting the very
+# shipped-the-references-without-the-tool defect this script was promoted to catch.
+[ -f "$ROOT/tools/cosave-info.py" ] && ok "cosave-info.py shipped" || bad "cosave-info.py" "MISSING from the payload"
 printf 'plainly not a co-save\n' > "$WORK/nope.txt"
-python "$ROOT/tools/cosave-info.py" "$WORK/nope.txt" >/dev/null 2>&1
-[ $? -eq 2 ] && ok "cosave-info refuses a non-cosave (exit 2)" \
-             || bad "cosave-info exit contract" "expected 2"
+out=$(python "$ROOT/tools/cosave-info.py" "$WORK/nope.txt" 2>&1); rc=$?
+if [ "$rc" -eq 2 ] && grep -qiE 'co-?save|magic|header' <<<"$out"; then
+  ok "cosave-info refuses a non-cosave (exit 2, and says why)"
+else
+  bad "cosave-info exit contract" "expected exit 2 with a reason, got $rc"; echo "$out" | head -3
+fi
 
 # --help must render prose, not source.
+# esp-verify-wrapper.sh dies on a missing spriggit BEFORE it reaches its --help case,
+# so on any machine without spriggit this went red on a perfectly good artifact and
+# blamed "banner range leaked source". A check that fails on correct payloads is the
+# one that gets worked around. SKIP LOUDLY instead -- the same answer this file already
+# gives for SKSE_CRASH_DIR.
 out=$(bash "$ROOT/tools/esp-verify-wrapper.sh" --help 2>&1)
-if grep -q 'WHY THIS EXISTS' <<<"$out" && ! grep -qE '^\s*(set -|#!/)' <<<"$out"; then
+if grep -qi 'spriggit not found' <<<"$out"; then
+  skip "esp-verify-wrapper --help" "spriggit not installed here; the banner is unreachable"
+elif grep -q 'WHY THIS EXISTS' <<<"$out" && ! grep -qE '^\s*(set -|#!/)' <<<"$out"; then
   ok "esp-verify-wrapper --help renders prose"
 else
   bad "esp-verify-wrapper --help" "banner range leaked source"
 fi
 
 # --- the version the artifact claims --------------------------------------
-if grep -q "## $TAG" "$ROOT/CHANGELOG.md" 2>/dev/null; then
+# Anchored, fixed-string, and end-of-heading: `grep -q "## $TAG"` matched `## v3.9.1`
+# when the tag was v3.9, and `$TAG` was treated as a REGEX so `.` was a wildcard.
+VER_RE=$(printf '%s' "${TAG#v}" | sed 's/[.]/[.]/g')
+if grep -qE "^#{1,3} +\[?v?${VER_RE}\]?([^0-9.]|$)" "$ROOT/CHANGELOG.md" 2>/dev/null; then
   ok "CHANGELOG carries a $TAG section"
 else
   bad "CHANGELOG section" "no '## $TAG' heading"
@@ -132,5 +182,8 @@ if [ "$fails" -eq 0 ]; then
 else
   echo "RESULT: $fails CHECK(S) FAILED"
 fi
-echo "(workspace: $WORK)"
+if [ "$fails" -gt 0 ]; then
+  trap - EXIT
+  echo "(workspace kept for inspection: $WORK)"
+fi
 exit $(( fails == 0 ? 0 : 1 ))

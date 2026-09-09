@@ -36,8 +36,12 @@ mkdir -p "$HB_DIR" 2>/dev/null
 # deny() and the inert-guard below both emit nothing -- and nothing is read as
 # ALLOW. So the one refusal that must not depend on jq is printed with printf.
 if ! "$JQ" --version >/dev/null 2>&1; then
+    # Backslashes out, forward slashes in: this string goes into JSON by printf, not
+    # through jq, and a Windows jq path (`where jq` prints one) would otherwise emit
+    # invalid escapes -- unparseable output is not a deny, it is an allow.
+    JQ_SHOWN="${JQ//\\//}"
     printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"GUARD INERT: %s cannot run jq (%s), so it evaluated NO rules and cannot report a decision. Allowing silently would be indistinguishable from approving. Install jq (winget install jqlang.jq) and run setup.sh to configure its path."}}\n' \
-        "$HOOK_NAME" "$JQ"
+        "$HOOK_NAME" "$JQ_SHOWN"
     exit 0
 fi
 if [ -n "$INPUT" ]; then
@@ -86,7 +90,24 @@ advise() { hooklog ADVISE "$1"; ADVICE="${ADVICE:+$ADVICE | }$1"; }
 # the session is rooted in. CLAUDE_PROJECT_DIR would narrow the guard to a subfolder if
 # someone opened Claude Code inside Data/Scripts, and a guard that silently protects
 # less than it claims is the defect this replaces.
-INSTALL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)"
+# ⚠ Normalise the separators FIRST. `dirname` splits on `/` only, so when this hook is
+# invoked by a pure-backslash path -- `bash "C:\Games\Skyrim VR\.claude\hooks\..."`,
+# which is what a Windows caller passing a native path produces -- dirname finds no
+# separator, returns `.`, and INSTALL_ROOT silently becomes the CURRENT WORKING
+# DIRECTORY. The guard then protects whatever folder the session happens to be in and
+# reports nothing wrong: it does not fail closed, because GAME_PATH is still non-empty.
+# Found by a test that invoked the hook the way Python's subprocess does.
+_SELF="${BASH_SOURCE[0]//\\//}"
+INSTALL_ROOT="$(cd "$(dirname "$_SELF")/../.." 2>/dev/null && pwd)"
+# ...and the SAME directory in its Windows spelling. `pwd` can return an MSYS MOUNT
+# ALIAS -- `/tmp/...` for `C:/Users/<you>/AppData/Local/Temp/...` -- and the alias
+# shares no prefix with the drive-letter form a command actually names, so the guard
+# derives a root that cannot match its own install and silently allows. MEASURED: an
+# install under a `/tmp`-mapped directory produced NO hook output for
+# `rm -rf "C:/Users/.../Program Files (x86)"`. Both spellings are added; a root is
+# only ever ADDITIVE, so naming the same directory twice costs nothing and closes the
+# gap wherever MSYS aliases a mount.
+INSTALL_ROOT_WIN="$(cd "$(dirname "$_SELF")/../.." 2>/dev/null && pwd -W 2>/dev/null)"
 
 # Turn an absolute path into an ERE matching it in EITHER dialect with EITHER
 # separator. PROJECT_DIR is MSYS (/c/...) under Git Bash while every path this project
@@ -107,15 +128,26 @@ path_to_ere() {
     for (( i=0; i<${#tail}; i++ )); do
         c="${tail:i:1}"
         case "$c" in
-            /)   out="$out[/\\\\]" ;;
+            # ONE OR MORE separators, not exactly one. A doubled separator names the
+            # identical directory on every platform, and it is not exotic -- it is how
+            # you WRITE a Windows path in Python or PowerShell source:
+            #   shutil.rmtree('C:\\GOG Games\\The Elder Scrolls V Skyrim VR')
+            # MEASURED: with a single-character class, that spelling and
+            # `rm -rf "C://GOG Games//..."` both produced NO hook output at all, which
+            # the runtime reads as allow -- while the single-separator spelling denied.
+            # The pre-arc rule matched with `[^"']*` and was separator-agnostic, so
+            # this was a regression introduced by resolving the root, and the replay
+            # evidence could not see it: 7,641 historical commands contain no doubled
+            # spelling, so "0 new refusals" was silent about an entire class.
+            /)   out="$out[/\\\\]+" ;;
             '['|']'|'*'|'+'|'?'|'^'|'$'|'('|')'|'{'|'}'|'|'|'.'|'\') out="$out\\$c" ;;
             *)   out="$out$c" ;;
         esac
     done
     if [ -n "$drive" ]; then
-        ERE_OUT="($drive:|[/\\\\]$drive)[/\\\\]$out"
+        ERE_OUT="($drive:|[/\\\\]+$drive)[/\\\\]+$out"
     else
-        ERE_OUT="[/\\\\]$out"
+        ERE_OUT="[/\\\\]+$out"
     fi
     return 0
 }
@@ -142,12 +174,13 @@ add_root() {   # add_root VAR_VALUE -> append its ERE to $1 if new
 
 GAME_PATH=""
 add_root GAME_PATH "$INSTALL_ROOT"
+add_root GAME_PATH "$INSTALL_ROOT_WIN"
 add_root GAME_PATH "${SKYRIM_GAME_ROOT:-}"
 
 # The config directory lives OUTSIDE the install, so it keeps its own rule and its own
 # refusal text -- the INIs there are not recoverable from a mod manager, and a reason
 # that named the wrong directory would be worse than none.
-CONFIG_PATH='Documents[/\\]My Games[/\\]Skyrim'
+CONFIG_PATH='Documents[/\\]+My Games[/\\]+Skyrim'
 add_root CONFIG_PATH "${SKYRIM_CONFIG_DIR:-}"
 
 # Advisory-only widening. The deny rules use the RESOLVED roots and nothing else.
@@ -169,7 +202,7 @@ ADVISE_PATH="$GAME_PATH|$CONFIG_PATH"
 # the path. MEASURED on 10 inputs: `rm Data/x`, `rm ./Data/x`, `rm ../Data/x`,
 # `rm -rf Data/x` and `rm -r -f Data/x` advise; `rm mydata/cache.bin`, `ls Data/`,
 # `rm -rf node_modules`, a pytest run and `git status` do not.
-RELATIVE_DATA_DELETE='(^|[;&|(`]|[[:space:]])(rm|rmdir|del|erase)([[:space:]]+-[^[:space:]]*)*[[:space:]]+([^[:space:]]*[/\\])?Data[/\\]'
+RELATIVE_DATA_DELETE='(^|[;&|(`]|[[:space:]])(rm|rmdir|del|erase)([[:space:]]+-[^[:space:]]*)*[[:space:]]+([^[:space:]]*[/\\]+)?Data[/\\]+'
 
 # FAIL CLOSED. If no root could be derived, this guard evaluates nothing, and a guard
 # that evaluated nothing must not answer "fine" -- that conflation is what left every
@@ -230,7 +263,7 @@ echo "$COMMAND" | grep -qiE -- '-(o|-output|-OutputPath)\s+["'"'"']?[^"'"'"' ]*\
 # decompile can leave the output .psc empty. This has destroyed reconstructed
 # sources twice. Copy the .pex to a temp directory and run it there.
 if echo "$COMMAND" | grep -qiE 'Champollion\b'; then
-    echo "$COMMAND" | grep -qiE "($GAME_PATH)[/\\\\]Data[/\\\\]Scripts[/\\\\][^\"' /\\\\]+[.]pex" \
+    echo "$COMMAND" | grep -qiE "($GAME_PATH)[/\\\\]+Data[/\\\\]+Scripts[/\\\\]+[^\"' /\\\\]+[.]pex" \
         && deny "BLOCKED: Champollion against a PEX in Data/Scripts/ has destroyed a .psc twice. Copy the .pex to a temp directory first, then run Champollion there."
 fi
 

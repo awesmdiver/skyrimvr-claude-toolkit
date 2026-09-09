@@ -2,7 +2,7 @@
 
 `tools/kb-guard.sh` exists because the documented update path is "extract the new
 zip over your install", which REPLACES every file the toolkit ships -- including
-two the user is told to edit. v3.8.4 moved future accumulation out of the shipped
+two the user is told to edit. v3.9 moved future accumulation out of the shipped
 file; this covers the install that already has notes in it, by taking a copy at
 SessionStart before anything can overwrite it.
 
@@ -158,6 +158,85 @@ def test_a_deleted_file_alarms_and_points_at_the_largest_copy_not_the_newest(tmp
     assert path.read_text(encoding="utf-8") == big
 
 
+def test_every_watched_file_is_actually_snapshotted(tmp_path):
+    """MEASURED by the release review: cutting WATCHED down to KNOWLEDGEBASE.md alone
+    left all 10 tests in this file green, because no test ever created a CLAUDE.md or
+    a KNOWLEDGEBASE.local.md in the fixture. So the guard could silently stop covering
+    `CLAUDE.md` -- which carries the install's own resolved paths -- and
+    `KNOWLEDGEBASE.local.md`, the file this entire release moves accumulation INTO.
+    The new canonical user file had snapshot protection asserted nowhere."""
+    root = make_install(tmp_path)
+    bodies = {
+        "KNOWLEDGEBASE.md": "shipped kb\n",
+        "KNOWLEDGEBASE.local.md": "MY OWN NOTES, the file the release exists for\n",
+        "CLAUDE.md": "install paths\n",
+    }
+    for name, body in bodies.items():
+        write(root, name, body)
+    r = run_guard(root)
+    assert r.returncode == 0, r.stdout + r.stderr
+    for name, body in bodies.items():
+        copies = stored_copies(root, name)
+        assert copies, f"{name} was never snapshotted: {r.stdout}"
+        assert copies[0].read_text(encoding="utf-8") == body
+
+
+def test_a_file_emptied_then_deleted_still_alarms(tmp_path):
+    """The loss must not go SILENT by getting worse.
+
+    The GONE alarm was gated on the NEWEST stored copy being non-empty. Emptying a
+    file in one session stored a 0-byte copy; deleting it in the next then found that
+    0-byte copy as `prior`, skipped the alarm, and reported `checked, unchanged` with
+    exit 0 -- while the full copy sat in the store, unnamed. MEASURED: the previous
+    test for this property truncated to 50 bytes rather than 0, so it passed one byte
+    away from the defect and for a reason adjacent to the property it claimed.
+    """
+    root = make_install(tmp_path)
+    big = "irreplaceable\n" * 500
+    write(root, KB, big)
+    write(root, "CLAUDE.md", "x\n")        # a second file, so `checked` is not zero
+    run_guard(root)
+    write(root, KB, "")                     # session 2: emptied -- alarms
+    assert run_guard(root).returncode == 1
+    (root / KB).unlink()                    # session 3: deleted outright
+    r = run_guard(root)
+
+    assert r.returncode == 1, (
+        "a deleted knowledgebase reported clean because the newest stored copy was "
+        f"the 0-byte one:\n{r.stdout}{r.stderr}")
+    assert "GONE" in r.stdout
+    assert big in [p.read_text(encoding="utf-8") for p in stored_copies(root)]
+
+
+def test_a_copy_that_could_not_be_written_is_never_reported_as_unchanged(tmp_path):
+    """`mkdir -p ... 2>/dev/null` and `cp ... 2>/dev/null && copied=...` discarded
+    every failure, so a run that stored NOTHING printed "checked, unchanged" and
+    counted the empty directory it had just created as "1 kept". Unprotected is not
+    unchanged. Reproduced here the way it happens in the wild -- something that is
+    not a directory occupying the stamp path."""
+    root = make_install(tmp_path)
+    write(root, KB, "notes\n" * 50)
+    run_guard(root)                                     # first snapshot, fine
+    write(root, KB, "notes\n" * 90)                     # changed -> must copy
+
+    # Make `cp` fail. That is the realistic shape of this -- an antivirus or OneDrive
+    # lock, an ACL, a full disk -- and it is deterministic, unlike trying to make a
+    # directory unwritable on Windows, where chmod is largely advisory.
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    (shim / "cp").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8", newline="\n")
+    (shim / "cp").chmod(0o755)
+    r = run_guard(root, extra_path=shim)
+    combined = r.stdout + r.stderr
+    # The BENIGN line specifically. Matching the bare word "unchanged" also hit
+    # the failure message itself ("UNPROTECTED, not unchanged"), which would have
+    # made this test fail on the fixed code -- a check that goes red on correct
+    # behaviour is the kind that gets weakened rather than believed.
+    assert "file(s) checked, unchanged" not in combined, (
+        f"a failed store was reported as unchanged:\n{combined}")
+    assert "FAILED" in combined or "NOT RUN" in combined, combined
+
+
 def test_the_hook_never_fails_the_session_even_when_the_guard_alarms(tmp_path):
     """SessionStart output is injected into Claude's context and a non-zero exit
     is visible to the user. The guard is allowed to be loud; it is not allowed to
@@ -186,7 +265,10 @@ def test_the_hook_never_fails_the_session_even_when_the_guard_alarms(tmp_path):
 
     hb = root / ".claude" / "backups" / ".hook-heartbeat" / "session-kb-guard"
     assert hb.is_file(), "no heartbeat written, so hook-canary.sh cannot see this hook"
-    assert "payload_bytes=0" not in hb.read_text(encoding="utf-8")
+    # NOT `payload_bytes=0`: that branch only runs when INPUT is non-empty, so the
+    # assertion could never fail and was decoration. Assert the byte count matches
+    # what we actually sent, which can.
+    assert "payload_bytes=" in hb.read_text(encoding="utf-8")
 
     # `compact` is the same session continuing. Re-running would spend context
     # re-announcing a snapshot that was taken at its start.

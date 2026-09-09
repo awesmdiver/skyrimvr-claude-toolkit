@@ -202,6 +202,8 @@ def test_every_hook_is_configured_by_setup_and_carries_one_placeholder():
     hooks = sorted(HOOK_DIR.glob("*.sh"))
     assert hooks, "no hooks found -- this test would pass vacuously"
     setup = (REPO / "setup.sh").read_text(encoding="utf-8")
+    loop = next((l for l in setup.splitlines() if l.startswith("for hook in ")), "")
+    assert loop, "setup.sh has no `for hook in ...` substitution loop; this test is stale"
 
     problems = []
     for h in hooks:
@@ -209,8 +211,14 @@ def test_every_hook_is_configured_by_setup_and_carries_one_placeholder():
         n = text.count("{{JQ_PATH}}")
         if n != 1:
             problems.append(f"{h.name}: {n} occurrences of the placeholder, expected exactly 1")
-        if h.name not in setup:
-            problems.append(f"{h.name}: not named in setup.sh, so it ships unconfigured")
+        # Assert membership of the SUBSTITUTION LOOP, not of the file. Every hook is
+        # also named in setup.sh's closing summary `echo`, so a whole-file substring
+        # test was satisfied by a print statement -- and MEASURED: deleting a hook from
+        # the `for hook in ...` list left this test green, which is exactly the defect
+        # its own docstring names. Fourth occurrence of "a check its own documentation
+        # satisfies"; this time the documentation was a line the same arc added.
+        if h.name not in loop:
+            problems.append(f"{h.name}: not in setup.sh's substitution loop, so it ships unconfigured")
     assert not problems, "\n  " + "\n  ".join(problems)
 
 
@@ -240,6 +248,43 @@ def test_every_hook_is_registered_in_settings_json():
     assert not unwired, (
         "these hooks ship but no event invokes them, so they never run: "
         + ", ".join(unwired))
+
+
+def test_every_registered_hook_has_a_timeout_that_is_not_the_old_five_seconds():
+    """A PreToolUse hook whose answer arrives after its `timeout` has that refusal
+    DISCARDED and the command runs -- measured, and undocumented. `protect-bash.sh`
+    was measured at 4,620 ms under load against the old 5,000 ms budget, so the delete
+    guard could silently disarm on a busy machine, and `hook-canary.sh` is structurally
+    blind to it (the hook is alive; it just answers late).
+
+    That fix was a number in a JSON file with nothing asserting it. MEASURED by the
+    release review: `sed 's/"timeout": 30/"timeout": 5/'` across all five registrations
+    left 78 tests green. A number the release notes call "a safety setting, not a
+    comfort one" was guarded by nothing at all.
+
+    SessionStart is allowed more: its documented default is 600s (Claude Code lowers
+    the default to 30 only for UserPromptSubmit/PreModelSwitch/PostModelSwitch), and
+    its hook copies files rather than answering a permission question.
+    """
+    settings = json.loads((REPO / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    floors = {"PreToolUse": 30, "SessionStart": 30}
+    problems = []
+    examined = 0
+    for event, matchers in settings.get("hooks", {}).items():
+        for matcher in matchers:
+            for entry in matcher.get("hooks", []):
+                name = entry.get("command", "?").rsplit("/", 1)[-1]
+                examined += 1
+                t = entry.get("timeout")
+                if t is None:
+                    problems.append(f"{event}/{name}: no explicit timeout")
+                elif t < floors.get(event, 30):
+                    problems.append(
+                        f"{event}/{name}: timeout {t}s is below the {floors.get(event, 30)}s "
+                        f"floor; a late refusal is DISCARDED")
+    assert examined >= 5, (
+        f"only {examined} hook registration(s) examined; this test would be vacuous")
+    assert not problems, "\n  " + "\n  ".join(problems)
 
 
 def test_the_users_knowledgebase_is_never_shipped_and_is_where_writes_go():

@@ -210,6 +210,28 @@ def test_protect_bash_decides(project, command, expected, why):
 # The defect itself
 # --------------------------------------------------------------------------
 
+@pytest.mark.parametrize("name", ["protect-bash.sh", "protect-files.sh"])
+def test_a_windows_jq_path_still_produces_parseable_json(tmp_path, name):
+    r"""The hook header tells the user to paste the output of `where jq`, which is
+    `C:\Users\...\jq.exe`. That went into a JSON string via printf, and `\U` is not
+    a valid JSON escape -- so the one refusal deliberately built to survive a broken
+    jq was itself unparseable, i.e. an allow. The branch had an off switch shaped
+    exactly like the thing it was guarding against."""
+    root = tmp_path / "install"
+    (root / ".claude" / "hooks").mkdir(parents=True)
+    text = (HOOKS / name).read_text(encoding="utf-8").replace(
+        "{{JQ_PATH}}", "C:" + BS + "Users" + BS + "me" + BS + "AppData" + BS + "jq.exe")
+    (root / ".claude" / "hooks" / name).write_text(text, encoding="utf-8", newline="\n")
+    payload = (cmd('rm -rf "C:/x"') if name == "protect-bash.sh"
+               else fpath("C:/Games/Skyrim VR/Data/M.esp"))
+    env = dict(os.environ, CLAUDE_PROJECT_DIR=str(root))
+    r = subprocess.run([_bash(), str(root / ".claude" / "hooks" / name)],
+                       input=json.dumps(payload), capture_output=True, text=True,
+                       env=env, timeout=60)
+    j = json.loads(r.stdout)          # the assertion IS that this does not raise
+    assert j["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
 @pytest.mark.parametrize("hook,field", [
     ("protect-files.sh", "file_path"),
     ("protect-bash.sh", "command"),
@@ -290,6 +312,20 @@ def test_every_hook_writes_a_liveness_heartbeat(project):
     ('rm -rf "C:/Users/Moona/Documents/My Games/Skyrim VR"', "the config directory"),
     ('reg.exe delete "HKLM' + BS + 'SOFTWARE' + BS + 'Bethesda Softworks" /f',
      "reg.exe -- the old pattern needed whitespace straight after `reg`"),
+    # DOUBLED separators. `shutil.rmtree('C:\\Games\\Skyrim VR')` is not an exotic
+    # spelling -- it is how you WRITE a Windows path in Python or PowerShell source,
+    # and the hook is handed the command TEXT, not the string Python will build from
+    # it. The root-resolution rework emitted exactly one separator per separator, so
+    # every doubled form produced NO hook output at all, which the runtime reads as
+    # ALLOW. The pre-arc rule matched with `[^"']*` and was separator-agnostic, so
+    # this was a REGRESSION -- and the 7,641-command replay could not see it, because
+    # no historical command spells the install that way. Replay prices over-blocking
+    # well and under-blocking not at all.
+    (f'python -c "import shutil; shutil.rmtree(\'{GAME.replace("/", BS * 2)}\')"',
+     "doubled backslashes -- the canonical Python spelling"),
+    (f'powershell -c "Remove-Item -Recurse -Force \'{GAME.replace("/", BS * 2)}\'"',
+     "doubled backslashes via PowerShell"),
+    (f'rm -rf "{GAME.replace("/", "//")}"', "doubled forward slashes"),
 ])
 def test_the_install_cannot_be_deleted_however_it_is_spelled(project, command, why):
     got, _ = fire(project, "protect-bash.sh", cmd(command))
@@ -403,10 +439,17 @@ def test_the_delete_guard_refuses_when_it_cannot_locate_the_install(tmp_path):
     (root / ".claude" / "hooks").mkdir(parents=True)
     text = (HOOKS / "protect-bash.sh").read_text(encoding="utf-8")
     text = text.replace("{{JQ_PATH}}", jq.replace(BS, "/"))
-    marker = 'INSTALL_ROOT="$(cd '
-    assert text.count(marker) == 1, "the INSTALL_ROOT line moved; this test is stale"
-    line = next(l for l in text.splitlines() if l.startswith(marker))
-    text = text.replace(line, 'INSTALL_ROOT=""')
+    # BOTH derived roots must be knocked out. The hook resolves the install twice --
+    # the MSYS spelling from `pwd` and the Windows spelling from `pwd -W` -- because
+    # `pwd` can return a mount alias (/tmp/...) that shares no prefix with the
+    # drive-letter form a command actually names. Blanking only one leaves GAME_PATH
+    # non-empty, so the fail-closed branch never fires and this test would be
+    # asserting nothing. It caught exactly that when the second root was added.
+    markers = ['INSTALL_ROOT="$(cd ', 'INSTALL_ROOT_WIN="$(cd ']
+    for marker in markers:
+        assert text.count(marker) == 1, f"{marker} moved; this test is stale"
+        line = next(l for l in text.splitlines() if l.startswith(marker))
+        text = text.replace(line, marker.split('=')[0] + '=""')
     hook = root / ".claude" / "hooks" / "protect-bash.sh"
     hook.write_text(text, encoding="utf-8", newline="\n")
 
@@ -418,6 +461,66 @@ def test_the_delete_guard_refuses_when_it_cannot_locate_the_install(tmp_path):
     h = json.loads(r.stdout)["hookSpecificOutput"]
     assert h["permissionDecision"] == "deny", "an unlocatable install must not allow"
     assert "GUARD INERT" in h["permissionDecisionReason"]
+
+
+def _hook_at(tmp_path, root_name, paths_env=""):
+    """A throwaway install whose ROOT NAME is chosen by the test, so the rules are
+    built from that path rather than from a fixture constant."""
+    jq = shutil.which("jq")
+    if not jq:
+        pytest.skip("jq not installed")
+    root = tmp_path / root_name
+    (root / ".claude" / "hooks").mkdir(parents=True)
+    text = (HOOKS / "protect-bash.sh").read_text(encoding="utf-8")
+    text = text.replace("{{JQ_PATH}}", jq.replace(BS, "/"))
+    (root / ".claude" / "hooks" / "protect-bash.sh").write_text(
+        text, encoding="utf-8", newline="\n")
+    if paths_env:
+        (root / ".claude" / "skyrim-paths.env").write_text(
+            paths_env, encoding="utf-8", newline="\n")
+    return root
+
+
+def _decide(root, command):
+    env = dict(os.environ, CLAUDE_PROJECT_DIR=str(root))
+    r = subprocess.run(
+        [_bash(), str(root / ".claude" / "hooks" / "protect-bash.sh")],
+        input=json.dumps(cmd(command)),
+        capture_output=True, text=True, env=env, timeout=60)
+    if not r.stdout.strip():
+        return "allow"
+    return json.loads(r.stdout)["hookSpecificOutput"].get("permissionDecision", "advise")
+
+
+def test_an_install_path_containing_regex_metacharacters_is_still_guarded(tmp_path):
+    """`C:/Program Files (x86)/Steam/steamapps/common/Skyrim VR` is the most common
+    real Steam layout there is, and `(x86)` unescaped is a valid ERE GROUP -- it
+    matches `Program Files x86`, so the guard would simply never fire on the actual
+    directory. `GAME_PATH` stays non-empty, so the fail-closed branch does not save
+    it either: it is the inert-guard state by another door.
+
+    MEASURED by the release review: deleting the escaping arm from `path_to_ere`
+    left all 70 tests in this file green while this exact deletion flipped to allow.
+    """
+    root = _hook_at(tmp_path, "Program Files (x86)")
+    target = str(root).replace(BS, "/")
+    assert _decide(root, f'rm -rf "{target}"') == "deny"
+
+
+def test_a_configured_config_directory_outside_documents_is_guarded(tmp_path):
+    """MO2/Wabbajack/Nolvus put the INIs in the instance's profile folder, which is
+    NOT under `Documents/My Games` -- so for exactly those users the hardcoded
+    literal rule matches nothing and `SKYRIM_CONFIG_DIR` is the ONLY thing guarding
+    their config. That arm had no test: replacing it with `:` left 88 tests green.
+    """
+    cfg = tmp_path / "MO2" / "profiles" / "Default"
+    cfg.mkdir(parents=True)
+    cfg_win = str(cfg).replace(BS, "/")
+    root = _hook_at(tmp_path, "game", paths_env=f'SKYRIM_CONFIG_DIR="{cfg_win}"\n')
+    assert _decide(root, f'rm -rf "{cfg_win}"') == "deny"
+    # ...and the control: a same-shaped path that is NOT the configured one.
+    other = str(tmp_path / "MO2" / "profiles" / "Someone Else").replace(BS, "/")
+    assert _decide(root, f'rm -rf "{other}"') != "deny"
 
 
 @pytest.mark.parametrize("name", ["protect-bash.sh", "protect-files.sh"])

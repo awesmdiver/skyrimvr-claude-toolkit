@@ -1,18 +1,18 @@
 # Changelog
 
-## Unreleased
+## v3.9
 
 ### 🔒 Security / safety — read this one
 
 - **A safety hook that runs out of time is IGNORED, and every hook here was
-  configured 5 seconds.** MEASURED: a `PreToolUse` hook whose refusal arrives after
+  configured 5 seconds -- three of the four; the fourth was 15.** MEASURED: a `PreToolUse` hook whose refusal arrives after
   its `timeout` has that refusal **discarded** — the command runs. Verified in both
   bypass and default permission modes, with controls passing in both (a hook denying
   in time blocks; one allowing in time runs). This is undocumented behaviour.
 
   It matters because `protect-bash.sh` measured **4,620 ms under machine load against
   a 5,000 ms budget** — 92% consumed. A busy machine (a build, a mod deploy, the game
-  running) could silently disarm the delete guard. **All four hooks now use a 30s
+  running) could silently disarm the delete guard. **All five hooks now use a 30s
   timeout**, re-verified: the same over-long hook now blocks correctly.
 
   ⚠ `tools/hook-canary.sh` cannot detect this class. The hook is alive and *does*
@@ -21,7 +21,7 @@
 
 - **Updating the toolkit destroyed your own knowledgebase notes, and the README said
   it did not.** The documented update path is "extract the new zip over your install",
-  so every file this toolkit ships is replaced — including the 120 KB
+  so every file this toolkit ships is replaced — including the 177,459-byte
   `KNOWLEDGEBASE.md` that Claude was instructed, by this toolkit, to append your
   findings to. A toolkit must never ship a file it also asks you to edit.
 
@@ -65,11 +65,59 @@
 
   Run it by hand any time: `bash tools/kb-guard.sh --verbose`.
 
+### Caught by the release review, before shipping
+
+A full review of everything this release changes (six reviewers, 20 files, ~1,500
+added lines) found defects in the release's own new code. They are listed because the
+first three were introduced by the fixes above.
+
+- **Doubled path separators defeated the delete guard.** Resolving the install root
+  emitted exactly one separator per separator, so
+  `shutil.rmtree('C:\\Games\\Skyrim VR')` — which is how you *write* a Windows path
+  in Python or PowerShell source — produced **no hook output at all**, and no output
+  means allow. The pre-v3.9 rule was separator-agnostic, so this was a regression.
+  ⚠ The 7,641-command replay could not see it: no historical command spells the
+  install that way. **Replay prices over-blocking well and under-blocking not at all.**
+- **The knowledgebase guard was slowest exactly when it had something to say.** With a
+  full snapshot store and three alarms it took 21.7 s idle and 39.3 s under load,
+  against a 30 s hook budget where a late answer is discarded — so the ALARM was the
+  part most likely never to arrive. One `wc` fork per file per comparison became one
+  for the whole store: **21.7 s → 1.6 s**.
+- **`.claude/skyrim-paths.env` was written double-quoted and is SOURCED**, and `$` and
+  backtick are legal characters in a Windows folder name. A real
+  `C:/Games/My$Stuff/Skyrim VR` reached the guard as `C:/Games/My/Skyrim VR` — matching
+  nothing, so the install was silently unguarded — and a backtick **executed on every
+  Bash call**. setup.sh's own check could not catch either, because sourcing cleanly
+  proves the file parses, not that it still says what was written. Now single-quoted,
+  and validated by comparing the values back.
+- A file emptied in one session and **deleted** in the next reported a clean install,
+  because the GONE alarm keyed on the newest stored copy rather than the largest.
+- A snapshot that **failed** to write reported "checked, unchanged" and counted the
+  empty directory it had just made as one kept.
+- The one refusal deliberately built to survive a broken jq emitted **invalid JSON**
+  when the configured jq path contained backslashes — which is what `where jq` prints,
+  and what this toolkit's own setup text tells you to paste. Unparseable output is not
+  a deny; it is an allow.
+- `tools/verify-release.sh`, the cold-clone verifier, had drifted from the release
+  gate at birth: a deliberately broken payload passed all fourteen of its checks.
+- Coverage gaps, each proven by putting the bug back and watching the named test go
+  red: the regex escaping that keeps `C:/Program Files (x86)/…` guarded, the
+  configured config directory (the only thing protecting an MO2 user's INIs), the
+  30 s timeouts this release leads with, and two of the three files the new guard
+  watches — including `KNOWLEDGEBASE.local.md`, the file this release moves
+  accumulation into. **230 → 251 tests, 8 new mutations.**
+
+Two corrections to earlier drafts of these notes, since a permanent record has no tone
+of voice: three of the four hooks were on a 5 s timeout (the fourth was 15 s), and a
+`git clone` of a Skyrim-named repository was **never** a false positive — `git clone`
+names no destroyer, so the old rule never reached its path test. The scratchpad, the
+toolkit checkout and `C:/Temp/skyrim-notes.txt` were, and are verified.
+
 ### Fixed
 
 - **The delete guard treated any path containing the word "Skyrim" as your game
   install.** It refused work in a temp folder, in a checkout of this toolkit, in
-  `C:/Temp/skyrim-notes.txt`, and even a `git clone` of a repository whose *name*
+  and `C:/Temp/skyrim-notes.txt`. (An earlier draft also claimed a `git clone` of a repository whose *name*
   contains "Skyrim VR". MEASURED by replaying **7,641 real commands**: 443 were
   refused, and **71 of those were this false positive — none of the 71 named the
   install**. The guard now resolves the real install root, from the hooks' own

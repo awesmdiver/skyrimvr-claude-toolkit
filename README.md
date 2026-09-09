@@ -18,7 +18,31 @@ It's not perfect, and it will require some trial and error — especially for co
 
 ---
 
-## New in v3.8.3: The Safety Hooks Were Never Running
+## New in v3.9: The Guard Was Refusing The Wrong Folder, And Could Be Timed Out
+
+**Three things were wrong with the safety layer, and two of them were silent.**
+
+A hook whose answer arrives after its `timeout` has that refusal **discarded** — the
+command runs. That is undocumented, and it was measured here in both permission modes.
+Three of the four hooks were configured 5 seconds (the fourth, 15) while `protect-bash.sh` measured 4,620 ms under
+load, so a busy machine could quietly disarm the delete guard. All hooks are now 30s,
+which is a safety setting rather than a comfort one. ⚠ `hook-canary.sh` cannot detect
+this class: the hook is alive and does receive its payload — it just answers too late.
+
+The delete guard called **any path containing the word "Skyrim"** your game install —
+a temp file, a checkout of this toolkit, a downloaded zip. Measured by replaying
+7,641 real commands: 443 refusals, **71 of them this false positive, none naming the
+install**. It now resolves the real root from its own location plus the paths
+`setup.sh` records. A guard that fires on ordinary work gets worked around, and then
+it protects nothing.
+
+And **updating this toolkit destroyed your own knowledgebase notes while the README
+promised it did not.** Accumulation moves to `KNOWLEDGEBASE.local.md`, which is never
+shipped; a new SessionStart hook also snapshots the files nothing can rebuild, so an
+install that already has notes in the shipped file is covered too. ⚠ If you have notes
+in `KNOWLEDGEBASE.md` from an older version, move them across before you update.
+
+## Also in v3.8.3: The Safety Hooks Were Never Running
 
 **If you installed this toolkit before v3.8.3, its protections were not in force.**
 Every hook read stdin with `cat /dev/stdin`, which returns nothing when Claude Code
@@ -256,7 +280,7 @@ Setup is this short because the environment is already built. There's no configu
    - A folder opens -- this is your Skyrim folder
 3. **Extract the zip directly into that folder**
    - Right-click the downloaded zip > Extract All > paste your Skyrim folder path > Extract
-   - The files blend in alongside your existing game files (nothing is overwritten)
+   - The files blend in alongside your existing game files. ⚠ **Files the toolkit ships ARE replaced** -- on a fresh install that costs you nothing, but on an UPDATE it replaces `CLAUDE.md`, `KNOWLEDGEBASE.md` and the hooks. Keep your own notes in `KNOWLEDGEBASE.local.md`, which is never shipped.
 
 ### Step 3: Open Claude Code in Your Skyrim Folder
 
@@ -382,7 +406,7 @@ These aren't things you configure -- they're already wired in. Every session, be
 
 | Protection | What It Does |
 |-----------|-------------|
-| **Command guard** | Blocks deleting game files or registry keys. Confirms all file operations in game directories. |
+| **Command guard** | Blocks deleting the install or Bethesda registry keys. **Advises** on other file operations in game directories -- a note to Claude, not a prompt to you. |
 | **File guard** | Blocks direct writes to ESP/ESM/BSA files. Confirms all other game file edits. |
 | **Auto-backup** | Copies every file to `.claude/backups/` before modification, with full audit log. |
 | **Confidence system** | Claude must rate confidence 0-100% and list assumptions before any change. |
@@ -410,7 +434,7 @@ A: Download the new version from Nexus and extract over the old one, then re-run
 
 **Anything the toolkit ships is REPLACED by that extract, including `KNOWLEDGEBASE.md` and `CLAUDE.md`.** Earlier versions of this answer claimed your knowledgebase additions were preserved. They were not — the shipped file overwrote yours, which is exactly when a reassurance is worth least. Your own notes belong in **`KNOWLEDGEBASE.local.md`**, which the toolkit never ships and the release build refuses to contain; Claude is instructed to read both files and write only to that one. If you have notes sitting in `KNOWLEDGEBASE.md` from an older version, move them across before you update. `.claude/backups/`, `.claude/skyrim-paths.env` and `.claude/settings.local.json` are likewise not in the zip and survive.
 
-Since v3.8.4 a SessionStart hook also copies `KNOWLEDGEBASE.md`, `KNOWLEDGEBASE.local.md` and `CLAUDE.md` into `.claude/backups/kb/` whenever they change, and says so loudly at the start of the next session if one of them vanished, emptied, or lost more than half its bytes — which is what extracting an update over your install looks like from the inside. Run it yourself any time with `bash tools/kb-guard.sh --verbose`. Note the honest limit: an update that replaces your 100 KB knowledgebase with a 140 KB shipped one shrinks nothing and raises no alarm. The stored copy is the protection; the alarm is a convenience on top of it.
+Since v3.9 a SessionStart hook also copies `KNOWLEDGEBASE.md`, `KNOWLEDGEBASE.local.md` and `CLAUDE.md` into `.claude/backups/kb/` whenever they change, and says so loudly at the start of the next session if one of them vanished, emptied, or lost more than half its bytes — which is what extracting an update over your install looks like from the inside. Run it yourself any time with `bash tools/kb-guard.sh --verbose`. Note the honest limit: an update that replaces your 100 KB knowledgebase with a 140 KB shipped one shrinks nothing and raises no alarm. The stored copy is the protection; the alarm is a convenience on top of it.
 
 ---
 

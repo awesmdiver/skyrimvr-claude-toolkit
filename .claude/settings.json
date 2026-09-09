@@ -42,7 +42,7 @@
           {
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-kb-guard.sh\"",
-            "timeout": 30,
+            "timeout": 120,
             "statusMessage": "Snapshotting the knowledgebase..."
           }
         ]

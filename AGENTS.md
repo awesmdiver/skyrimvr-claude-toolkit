@@ -39,7 +39,7 @@ If you are not running under Claude Code, compensate deliberately:
    YAML, edit the YAML, deserialize) or xelib. A hand-edited plugin binary is a corrupted plugin.
 3. **Show the user the change before applying it**, especially for INIs, load order files, and
    anything under the game directory. The hooks normally force this pause; without them it is on you.
-4. **Snapshot `.psc` sources before experimenting.** They are not covered by any automatic backup even
+4. **Snapshot `.psc` sources before experimenting.** They ARE covered by `snapshot-before-tool.sh` (before every Bash command) and by `backup-before-edit.sh` (Edit/Write, no extension filter) -- an earlier version of this line said neither covered them, which was wrong. Snapshot anyway for a named rollback point, because an automatic copy you cannot identify later is not a rollback plan.
    under Claude Code, and reconstructing a working script from memory is miserable.
 
 ## Ground rules that apply regardless of agent
@@ -50,4 +50,4 @@ If you are not running under Claude Code, compensate deliberately:
 - **Never assume Skyrim SE behaviour equals Skyrim VR behaviour.** Verify per feature.
 - **Use the engine's own mechanisms before writing a Papyrus workaround**, and model any new mechanic
   on how vanilla Skyrim does the closest equivalent.
-- **Consult `KNOWLEDGEBASE.md` before acting**, and add what you learn back into it afterwards.
+- **Consult `KNOWLEDGEBASE.md` before acting**, and write what you learn into **`KNOWLEDGEBASE.local.md`** -- never back into `KNOWLEDGEBASE.md`. The toolkit ships that file, so the next update replaces it and your notes are gone.

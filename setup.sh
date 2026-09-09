@@ -298,8 +298,15 @@ fi
 # --- Configure hook scripts (replace jq placeholder) ---
 echo ""
 echo "Configuring safety hooks..."
+HOOKS_MISSING=0
 for hook in protect-bash.sh protect-files.sh backup-before-edit.sh snapshot-before-tool.sh session-kb-guard.sh; do
-    if grep -q '{{JQ_PATH}}' "$GAME_DIR/.claude/hooks/$hook"; then
+    # Check it EXISTS first. `grep -q` on a missing file exits 2, which is not 0, so
+    # control fell to the else branch and a hook that had been quarantined by antivirus
+    # or lost to a partial unzip was reported as "Already configured".
+    if [ ! -f "$GAME_DIR/.claude/hooks/$hook" ]; then
+        echo "  MISSING: .claude/hooks/$hook -- this hook is NOT installed and will never run"
+        HOOKS_MISSING=$((HOOKS_MISSING + 1))
+    elif grep -q '{{JQ_PATH}}' "$GAME_DIR/.claude/hooks/$hook"; then
         sed -i "s|{{JQ_PATH}}|$JQ_PATH|g" "$GAME_DIR/.claude/hooks/$hook"
         echo "  Configured: .claude/hooks/$hook"
     else
@@ -320,19 +327,36 @@ done
 # backslash level through some tool boundaries, and these are Windows paths.
 echo ""
 echo "Recording resolved paths for the safety hooks..."
+# SINGLE quotes, with any embedded quote escaped. protect-bash.sh SOURCES this file,
+# and `$` and backtick are both legal characters in an NTFS folder name. Written
+# double-quoted, MEASURED: a real folder `C:/Games/My$Stuff/Skyrim VR` arrived at the
+# guard as `C:/Games/My/Skyrim VR` -- matching nothing, so the install was silently
+# unguarded -- and a backtick in the path EXECUTED on every single Bash tool call.
+sq() {
+    local s=$1
+    s=${s//\'/\'\\\'\'}          # ' -> '\''
+    printf "'%s'" "$s"
+}
 {
     printf '# Written by setup.sh. Machine-local: not tracked, not shipped.\n'
     printf '# protect-bash.sh reads these to tell YOUR install from a path that merely\n'
     printf '# contains the word "Skyrim" -- a scratchpad, a checkout, a downloaded zip.\n'
-    printf 'SKYRIM_GAME_ROOT="%s"\n' "$GAME_ROOT_WIN"
-    printf 'SKYRIM_CONFIG_DIR="%s"\n' "$CONFIG_DIR"
-    printf 'SKYRIM_LOADORDER_DIR="%s"\n' "$LOADORDER_DIR"
+    printf 'SKYRIM_GAME_ROOT=%s\n' "$(sq "$GAME_ROOT_WIN")"
+    printf 'SKYRIM_CONFIG_DIR=%s\n' "$(sq "$CONFIG_DIR")"
+    printf 'SKYRIM_LOADORDER_DIR=%s\n' "$(sq "$LOADORDER_DIR")"
 } > "$GAME_DIR/.claude/skyrim-paths.env"
 
 # It must SOURCE, or the hooks silently fall back to the self-derived root alone. A
 # config bash cannot read is the failure this check exists to catch, and it costs
 # nothing to run here where the user can still see the message.
-if ( set -a; . "$GAME_DIR/.claude/skyrim-paths.env" ) 2>/dev/null; then
+# ⚠ Sourcing cleanly proves the file PARSES, which is not the same as proving it
+# still says what we wrote. The previous version of this check asked only the first
+# question, so a path whose `$` had been expanded away passed it and printed success.
+# Read the values back and compare them.
+_want=$(printf '%s\n%s\n%s\n' "$GAME_ROOT_WIN" "$CONFIG_DIR" "$LOADORDER_DIR")
+_got=$( set -a; . "$GAME_DIR/.claude/skyrim-paths.env" 2>/dev/null
+        printf '%s\n%s\n%s\n' "${SKYRIM_GAME_ROOT:-}" "${SKYRIM_CONFIG_DIR:-}" "${SKYRIM_LOADORDER_DIR:-}" )
+if [ "$_want" = "$_got" ]; then
     echo "  Wrote: .claude/skyrim-paths.env"
 else
     echo "  WARNING: .claude/skyrim-paths.env does not parse as shell."

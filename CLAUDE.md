@@ -562,7 +562,7 @@ rules are graded, and only the first list actually refuses.
 
   ⚠ **If no root can be resolved, the guard DENIES.** A guard that evaluated nothing
   must not answer "fine" -- that conflation is what left every hook here inert for five
-  weeks. So a broken `skyrim-paths.env` costs you refusals, never silent permission.
+  weeks. ⚠ A broken `skyrim-paths.env` does NOT cost you refusals: the self-derived root always resolves, so the guard silently narrows to the install folder plus the generic config literal, and an MO2 profile directory stops being guarded with nothing reported. The fail-closed branch fires only when NO root resolves at all.
 
   ⚠ **A relative path cannot be resolved** -- the hook is never told the caller's
   working directory -- so `rm Data/x.nif` gets an advisory, not a refusal. Prefer
@@ -611,16 +611,16 @@ written from inside real invocations, which does.
   (Writing the user's **own** in-development mod files into `Data/` is a different thing and is fine.)
 
 ### Safety improvement loop
-After every session, near-miss, or unexpected outcome, evaluate whether a new hook, expanded protection, or knowledgebase entry could have prevented or caught the issue. Propose new hooks when a pattern of risk emerges -- proactively when you notice a gap. Document proposed hooks in the "Hook Candidates" section of `KNOWLEDGEBASE.md`.
+After every session, near-miss, or unexpected outcome, evaluate whether a new hook, expanded protection, or knowledgebase entry could have prevented or caught the issue. Propose new hooks when a pattern of risk emerges -- proactively when you notice a gap. Document proposed hooks in a "Hook Candidates" section of `KNOWLEDGEBASE.local.md`.
 
 ### Audit trail
-- Every file edit is auto-backed up to `.claude/backups/` with timestamp
+- Every file edit **made through the Edit/Write tools** is auto-backed up to `.claude/backups/` with a timestamp. ⚠ A file written by a script run through Bash is not seen by that hook at all -- see the knowledgebase-guard note below.
 - An audit log at `.claude/backups/AUDIT_LOG.txt` records every file touched, when, and by which tool
 
 ### Iteration snapshots (standing process — do not skip)
 Mod development requires many experimental iterations. Without snapshots, reverting to a known-good state means reconstructing code from memory or entangled transcript turns.
 1. **Before any experimental change**, copy the current `.psc` source files to `.claude/backups/<descriptive-name>/` (e.g. `known-good-pre-stagger/`). This is the rollback point.
-2. **The auto-backup hook covers INIs only** — it does NOT capture `.psc`/`.pex`. Spriggit auto-backups capture the ESP on every deserialize, but not scripts.
+2. **The auto-backup hook has no extension filter** -- it copies any file Claude edits through Edit/Write, `.psc` included, and `snapshot-before-tool.sh` additionally snapshots `.psc`/`.pex` before every Bash command. (This line previously claimed it covered INIs only, which was false in both directions.) What neither covers is a file written by a script through Bash -- `session-kb-guard.sh` exists for exactly that channel. — it does NOT capture `.psc`/`.pex`. Spriggit auto-backups capture the ESP on every deserialize, but not scripts.
 3. **After confirming a state works in-game**, snapshot both scripts and a Spriggit export to a dated `known-good/` folder, named descriptively (what works, not just the date).
 4. **"Restore from transcript" is a trap** — past-turn code is entangled with the bugs being fixed that same turn. Read it for reference; don't paste it forward blindly.
 
