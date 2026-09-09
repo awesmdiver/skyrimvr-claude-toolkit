@@ -431,7 +431,27 @@ Nexus also offers a free REST+GraphQL API ([api-docs.nexusmods.com](https://api-
 
 `KNOWLEDGEBASE.md` (project root) is the master reference for all discovered quirks, gotchas, and cross-version differences. **Always consult it before making changes** to avoid repeating past mistakes.
 
-**Standing instruction**: After every debugging session, mod investigation, or web research, extract any new facts (engine quirks, VR vs SSE differences, API gotchas, tool limitations) and add them to KNOWLEDGEBASE.md. We learn from everything we come into contact with.
+### Two files, and which one to WRITE to
+
+| file | owner | shipped in the zip? |
+|---|---|---|
+| `KNOWLEDGEBASE.md` | the toolkit | **yes** — replaced on every update |
+| `KNOWLEDGEBASE.local.md` | **you** | **never** — the release refuses to contain it |
+
+**Standing instruction**: after every debugging session, mod investigation, or web
+research, extract any new facts (engine quirks, VR vs SSE differences, API gotchas,
+tool limitations) and append them to **`KNOWLEDGEBASE.local.md`**, creating it if it
+does not exist. Read both files; write only to the local one.
+
+**Why the split, and it is not bookkeeping.** The upgrade path is "extract the new zip
+over your install", so any file the toolkit ships is *replaced* on update. A file that
+is both shipped by us and appended to by you loses everything you added, silently, at
+the moment you update — and the README used to promise the opposite. A toolkit must
+never ship a file it also asks you to edit.
+
+⚠ If you already have accumulated notes inside `KNOWLEDGEBASE.md` from an older
+version, move them to `KNOWLEDGEBASE.local.md` now. Anything left in the shipped file
+is lost at the next update.
 
 ## Top Gotchas (Always In Context)
 

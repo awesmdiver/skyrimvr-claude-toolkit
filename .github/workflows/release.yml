@@ -44,6 +44,13 @@ jobs:
                 --exclude '.venv' --exclude '__pycache__' --exclude '.pytest_cache' \
                 ./ "/tmp/$NAME/"
           test ! -d "/tmp/$NAME/tests" || { echo "::error::tests/ leaked into the release payload"; exit 1; }
+          # YOUR knowledgebase must never be IN the bundle. The update path is
+          # "extract over your install", so anything shipped here overwrites the
+          # user's copy -- which is the whole reason accumulation was moved out of
+          # KNOWLEDGEBASE.md and into a file we do not ship. If this ever appears in
+          # the payload, the split has silently stopped protecting anyone.
+          test ! -e "/tmp/$NAME/KNOWLEDGEBASE.local.md" || { echo "::error::KNOWLEDGEBASE.local.md is in the release payload; extracting this release would overwrite the user's own notes"; exit 1; }
+          test -f "/tmp/$NAME/KNOWLEDGEBASE.md" || { echo "::error::the toolkit's own KNOWLEDGEBASE.md is missing from the payload"; exit 1; }
           test -d "/tmp/$NAME/.claude/hooks" || { echo "::error::.claude/ missing from payload"; exit 1; }
 
           # THE SHIPPED HOOKS MUST NOT BE INERT.

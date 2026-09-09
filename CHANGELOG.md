@@ -19,6 +19,23 @@
   receive its payload — it simply answers too late. Every liveness check added after
   the inert-hook incident is blind to it.
 
+- **Updating the toolkit destroyed your own knowledgebase notes, and the README said
+  it did not.** The documented update path is "extract the new zip over your install",
+  so every file this toolkit ships is replaced — including the 120 KB
+  `KNOWLEDGEBASE.md` that Claude was instructed, by this toolkit, to append your
+  findings to. A toolkit must never ship a file it also asks you to edit.
+
+  Your notes now go to **`KNOWLEDGEBASE.local.md`**, which is untracked, never shipped,
+  and the release build **refuses** to produce a payload containing it. Claude reads
+  both files and writes only to the local one.
+
+  ⚠ **If you have notes in `KNOWLEDGEBASE.md` from an older version, move them across
+  before you next update.** This change protects future accumulation; it cannot
+  recover what a past extract already overwrote.
+
+  The README FAQ said "Your knowledgebase additions are preserved". That sentence was
+  false for as long as it has existed, and it is corrected.
+
 ### Fixed
 
 - **The delete guard treated any path containing the word "Skyrim" as your game

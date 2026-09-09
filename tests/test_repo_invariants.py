@@ -211,3 +211,56 @@ def test_every_hook_is_configured_by_setup_and_carries_one_placeholder():
         if h.name not in setup:
             problems.append(f"{h.name}: not named in setup.sh, so it ships unconfigured")
     assert not problems, "\n  " + "\n  ".join(problems)
+
+
+def test_the_users_knowledgebase_is_never_shipped_and_is_where_writes_go():
+    """A toolkit must not ship a file it also asks the user to edit.
+
+    The documented update path is "extract the new zip over your install", so every
+    file this repo ships is REPLACED on update. `KNOWLEDGEBASE.md` was both shipped by
+    us and appended to by the user on our own standing instruction, so an update
+    silently destroyed their accumulated notes -- while the README promised the
+    opposite ("Your knowledgebase additions are preserved"). A reassurance that fires
+    exactly when the thing it names has been destroyed is worse than saying nothing.
+
+    Accumulation now goes to `KNOWLEDGEBASE.local.md`, which is untracked and gated out
+    of the release payload. Three pieces have to agree or the split protects nobody, so
+    all three are asserted here rather than trusted:
+
+      * CLAUDE.md must direct writes to the local file
+      * .gitignore must keep it untracked
+      * the release workflow must REFUSE a payload containing it
+    """
+    local = "KNOWLEDGEBASE.local.md"
+
+    claude_md = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+    assert local in claude_md, (
+        "CLAUDE.md does not mention " + local + " -- the standing instruction still "
+        "sends new findings into the file the next update overwrites")
+
+    gitignore = (REPO / ".gitignore").read_text(encoding="utf-8")
+    assert any(l.strip() == local for l in gitignore.splitlines()), (
+        local + " is not in .gitignore, so a contributor's own notes can be committed "
+        "-- and anything tracked is shipped, which is the defect this prevents")
+
+    # Match the CONSTRUCT, not the name, and skip comments. The first version of this
+    # assertion looked for the filename anywhere in release.yml -- which the comment
+    # explaining the gate also contains, so deleting the gate itself left the test
+    # green. A check that its own documentation satisfies is worse than no check: it
+    # goes red only when someone removes the explanation.
+    workflow = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    gate = [
+        l for l in workflow.splitlines()
+        if not l.strip().startswith("#") and "test ! -e" in l and local in l
+    ]
+    assert gate, (
+        "release.yml has no executable assertion that " + local + " is absent from the "
+        "payload (a comment mentioning it does not count). Without that gate the split "
+        "is a convention, and a convention cannot go red")
+
+    # ...and the toolkit's own knowledgebase must still SHIP. Dropping it would make
+    # the assertion above pass for the wrong reason.
+    assert (REPO / "KNOWLEDGEBASE.md").is_file(), "the toolkit's KNOWLEDGEBASE.md is gone"
+    assert not (REPO / local).exists(), (
+        local + " exists in the repo. It is the USER's file; if it is here it will be "
+        "tracked and shipped, overwriting theirs on update")

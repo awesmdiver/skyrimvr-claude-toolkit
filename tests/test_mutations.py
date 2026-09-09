@@ -122,6 +122,17 @@ MUTATIONS = [
         id="http-status-is-honored",
     ),
     # --- repo invariants ---------------------------------------------------
+    # Drop the release gate that keeps the USER's knowledgebase out of the payload.
+    # Everything still looks right -- CLAUDE.md still says where to write, .gitignore
+    # still keeps it untracked -- but nothing would stop a release shipping it and
+    # overwriting their notes on update. A convention with no gate cannot go red.
+    pytest.param(
+        ".github/workflows/release.yml",
+        'test ! -e "/tmp/$NAME/KNOWLEDGEBASE.local.md"',
+        "true",
+        "tests/test_repo_invariants.py::test_the_users_knowledgebase_is_never_shipped_and_is_where_writes_go",
+        id="users-knowledgebase-stays-out-of-the-payload",
+    ),
     pytest.param(
         # Reproduce the real drift: README's copy of the setup prompt loses the
         # DevBench sentence while the canonical copy keeps it.
