@@ -54,7 +54,7 @@ HB_DIR="$BACKUP_DIR/.hook-heartbeat"
 mkdir -p "$HB_DIR" 2>/dev/null
 
 # jq is how this hook SPEAKS. If it is missing, unset, or still the literal
-# {{JQ_PATH}} placeholder (the user extracted the zip and never ran setup.sh), then
+# unsubstituted JQ placeholder (the user extracted the zip and never ran setup.sh), then
 # deny() and the inert-guard below both emit nothing -- and nothing is read as
 # ALLOW. So the one refusal that must not depend on jq is printed with printf.
 if ! "$JQ" --version >/dev/null 2>&1; then

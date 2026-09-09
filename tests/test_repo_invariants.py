@@ -182,3 +182,32 @@ def test_every_hook_writes_a_heartbeat_and_handles_an_empty_payload():
         if 'if [ -n "$INPUT" ]' not in text and 'if [ -z "$INPUT" ]' not in text:
             missing.append(f"{h.name}: does not branch on an empty payload")
     assert not missing, "\n  " + "\n  ".join(missing)
+
+
+def test_every_hook_is_configured_by_setup_and_carries_one_placeholder():
+    """setup.sh substitutes {{JQ_PATH}} into a HARDCODED LIST of hook filenames, with
+    `sed ... /g`. Two things rot silently here:
+
+    1. A hook added later is never named in that list, so it ships with the literal
+       placeholder. Since a blocking hook now REFUSES when jq is unrunnable, an
+       unsubstituted hook denies every call -- loud, but only after install.
+    2. A second `{{JQ_PATH}}` anywhere in a hook (a comment mentioning it, say) is
+       rewritten too, so "the unsubstituted placeholder" turns into a sentence
+       claiming a real path is a placeholder. Harmless at runtime, but it destroys
+       the property that makes case 1 detectable: exactly one occurrence per hook.
+
+    Both were live: two hooks carried the literal in an explanatory comment.
+    """
+    hooks = sorted(HOOK_DIR.glob("*.sh"))
+    assert hooks, "no hooks found -- this test would pass vacuously"
+    setup = (REPO / "setup.sh").read_text(encoding="utf-8")
+
+    problems = []
+    for h in hooks:
+        text = h.read_text(encoding="utf-8")
+        n = text.count("{{JQ_PATH}}")
+        if n != 1:
+            problems.append(f"{h.name}: {n} occurrences of the placeholder, expected exactly 1")
+        if h.name not in setup:
+            problems.append(f"{h.name}: not named in setup.sh, so it ships unconfigured")
+    assert not problems, "\n  " + "\n  ".join(problems)
